@@ -19,6 +19,7 @@ import android.support.v4.app.NotificationCompat;
 import java.util.HashSet;
 
 import dev.ukanth.ufirewall.Api;
+import dev.ukanth.ufirewall.InterfaceTracker;
 import dev.ukanth.ufirewall.MainActivity;
 import dev.ukanth.ufirewall.R;
 import dev.ukanth.ufirewall.broadcast.ConnectivityChangeReceiver;
@@ -125,6 +126,7 @@ public class FirewallService extends Service {
                 .setVisibility(Notification.VISIBILITY_SECRET)
                 .setContentText(notificationText)
                 .setSmallIcon(icon)
+                .setOngoing(true)
                 .build();
         switch (notifyType) {
             case 0:
@@ -135,30 +137,40 @@ public class FirewallService extends Service {
                 break;
         }
 
-        if(G.activeNotification()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForeground(NOTIFICATION_ID, notification);
-            } else {
-                manager.notify(NOTIFICATION_ID, notification);
-            }
+        //if(G.activeNotification()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForeground(NOTIFICATION_ID, notification);
         } else {
+            manager.notify(NOTIFICATION_ID, notification);
+        }
+        /*} else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForeground(NOTIFICATION_ID, notification);
             } else {
                 //empty one
                 startForeground(NOTIFICATION_ID, new Notification());
             }
-        }
+        }*/
 
 
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+
+        //incase if it's not null, make sure we unregister it
+        if(packageReceiver != null) {
+            unregisterReceiver(packageReceiver);
+        }
+
+        if (connectivityReciver != null) {
+            unregisterReceiver(connectivityReciver);
+        }
+
         connectivityReciver = new ConnectivityChangeReceiver();
         filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
+        filter.addAction(ConnectivityChangeReceiver.TETHER_STATE_CHANGED_ACTION);
         registerReceiver(connectivityReciver, filter);
-
 
         IntentFilter intentFilter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
         intentFilter.addDataScheme("package");
@@ -169,6 +181,8 @@ public class FirewallService extends Service {
         intentFilter = new IntentFilter(Intent.ACTION_PACKAGE_REMOVED);
         intentFilter.addDataScheme("package");
         registerReceiver(packageReceiver, intentFilter);
+
+        InterfaceTracker.setupBluetoothProfile(this);
 
         return START_STICKY;
     }
@@ -184,6 +198,5 @@ public class FirewallService extends Service {
             packageReceiver = null;
         }
         super.onDestroy();
-
     }
 }

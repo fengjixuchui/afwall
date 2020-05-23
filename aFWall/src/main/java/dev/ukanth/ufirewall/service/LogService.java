@@ -29,6 +29,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
@@ -40,7 +41,6 @@ import android.widget.Toast;
 
 import com.raizlabs.android.dbflow.config.FlowConfig;
 import com.raizlabs.android.dbflow.config.FlowManager;
-import com.stericson.roottools.RootTools;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -96,6 +96,8 @@ public class LogService extends Service {
         if (showToastRunnable == null) {
             showToastRunnable = new CancelableRunnable() {
                 public void run() {
+
+
                     if (cancel && toast != null) {
                         toast.cancel();
                     }
@@ -110,21 +112,20 @@ public class LogService extends Service {
                         toast.setView(toastLayout);
                     }
 
+                    //Fix for many crashes in android 28
+                    if (Build.VERSION_CODES.P >= 28 && toast.getView().isShown()) {
+                        toast.cancel();
+                    }
+
                     switch (toastDuration) {
                         case 3500:
                             toast.setDuration(Toast.LENGTH_LONG);
                             break;
                         case 7000:
                             toast.setDuration(Toast.LENGTH_LONG);
-
                             if (showOnlyToastRunnable == null) {
-                                showOnlyToastRunnable = new Runnable() {
-                                    public void run() {
-                                        toast.show();
-                                    }
-                                };
+                                showOnlyToastRunnable = () -> toast.show();
                             }
-
                             handler.postDelayed(showOnlyToastRunnable, 3250);
                             break;
                         default:
@@ -172,7 +173,7 @@ public class LogService extends Service {
         startLogService();
     }
 
-    /*private static class LogTask extends AsyncTask<Void, Void, Void> {
+    private static class LogTask extends AsyncTask<Void, Void, Void> {
         private LogEvent event;
 
         private LogTask(LogEvent event) {
@@ -193,7 +194,7 @@ public class LogService extends Service {
                 }
             }
         }
-    }*/
+    }
 
     private void startLogService() {
         if (disposable != null) {
@@ -222,20 +223,17 @@ public class LogService extends Service {
                 if (G.logDmsg().isEmpty()) {
                     G.logDmsg("OS");
                 }
-                //default to busybox if available
-                if(RootTools.isBusyboxAvailable()) {
-                    G.logDmsg("BX");
-                }
-                G.logTarget("LOG");
                 switch (G.logTarget()) {
                     case "LOG":
                         switch (G.logDmsg()) {
                             case "OS":
-                                logPath = Api.getShellPath(getApplicationContext()) + "/aflogshell";
+                                logPath = "echo PID=$$ & while true; do dmesg -c ; sleep 1 ; done";
                                 break;
                             case "BX":
-                                logPath = Api.getShellPath(getApplicationContext()) + "/aflogshellb";
+                                logPath = "echo PID=$$ & while true; do busybox dmesg -c ; sleep 1 ; done";
                                 break;
+                            default:
+                                logPath = "echo PID=$$ & while true; do dmesg -c ; sleep 1 ; done";
                         }
                         break;
                     case "NFLOG":
@@ -245,39 +243,43 @@ public class LogService extends Service {
                 }
 
                 Log.i(TAG, "Starting Log Service: " + logPath + " for LogTarget: " + G.logTarget());
-                Log.i(TAG, "rootSession " + rootSession != null ? "rootSession is not NULL" : "rootSession is NULL");
+                Log.i(TAG, "rootSession " + rootSession != null ? "rootSession is not Null" : "Null rootSession");
                 handler = new Handler();
 
-                closeSession();
-                rootSession = new Shell.Builder()
-                        .useSU()
-                        .setMinimalLogging(true)
-                        .setOnSTDOUTLineListener(line -> {
-                            if (line != null && !line.isEmpty() && line.startsWith("PID=")) {
-                                try {
-                                    String uid = line.split("=")[1];
-                                    if (uid != null) {
-                                        Set data = G.storedPid();
-                                        if (data == null || data.isEmpty()) {
-                                            data = new HashSet();
-                                            data.add(uid);
-                                            G.storedPid(data);
-                                        } else if (!data.contains(uid)) {
-                                            Set data2 = new HashSet();
-                                            data2.addAll(data);
-                                            data2.add(uid);
-                                            G.storedPid(data2);
+                if(logPath != null) {
+                    rootSession = new Shell.Builder()
+                            .useSU()
+                            .setMinimalLogging(true)
+                            .setOnSTDOUTLineListener(line -> {
+                                if (line != null && !line.isEmpty() && line.startsWith("PID=")) {
+                                    try {
+                                        String uid = line.split("=")[1];
+                                        if (uid != null) {
+                                            Set data = G.storedPid();
+                                            if (data == null || data.isEmpty()) {
+                                                data = new HashSet();
+                                                data.add(uid);
+                                                G.storedPid(data);
+                                            } else if (!data.contains(uid)) {
+                                                Set data2 = new HashSet();
+                                                data2.addAll(data);
+                                                data2.add(uid);
+                                                G.storedPid(data2);
+                                            }
                                         }
+                                    } catch (Exception e) {
                                     }
-                                } catch (Exception e) {
-                                    Log.i(TAG, "Exception in reading logs " + e.getMessage());
-                                    e.printStackTrace();
+                                } else {
+                                    storeLogInfo(line, getApplicationContext());
                                 }
-                            } else {
-                                storeLogInfo(line, getApplicationContext());
-                            }
 
-                        }).addCommand(logPath).open();
+                            }).addCommand(logPath).open();
+                } else {
+                    Log.i(TAG, "Unable to start log service. Log Path is empty");
+                    Api.toast(getApplicationContext(), getApplicationContext().getString(R.string.error_log));
+                    G.enableLogService(false);
+                    stopSelf();
+                }
             } else {
                 Log.i(TAG, "Unable to start log service. LogTarget is empty");
                 Api.toast(getApplicationContext(), getApplicationContext().getString(R.string.error_log));
@@ -291,14 +293,34 @@ public class LogService extends Service {
 
     private void closeSession() {
         new Thread(() -> {
-            Log.i(Api.TAG, "Cleanup!");
+            Log.i(Api.TAG, "Cleanup session");
             if (rootSession != null) {
                 rootSession.close();
-                Log.i(Api.TAG, "Cleaned up existing session");
             }
         }).start();
-        //Api.cleanupUid();
+        Api.cleanupUid();
     }
+
+
+    /* private static class Task extends AsyncTask<Void, Void, LogInfo> {
+         private Context context;
+         private String line;
+         private Task(Context context, String line) {
+             this.context = context;
+             this.line = line;
+         }
+         @Override
+         protected LogInfo doInBackground(Void... voids) {
+             return LogInfo.parseLogs(line, context);
+         }
+         @Override
+         protected void onPostExecute(LogInfo a) {
+             if (a != null) {
+                 LogRxEvent.publish(new LogEvent(a, context));
+             }
+         }
+     }
+ */
     private void storeLogInfo(String line, Context context) {
         if (G.enableLogService()) {
             if (line != null && line.trim().length() > 0) {
@@ -308,7 +330,6 @@ public class LogService extends Service {
                             LogRxEvent.publish(new LogEvent(LogInfo.parseLogs(line, context, "{AFL}", 0), context));
                         }).start();
                     } catch (Exception e) {
-                        Log.i(TAG, e.getMessage());
                         //Handle when has exception thrown
                     }
                 } /*else if (line.contains("{AFL-ALLOW}")) {

@@ -35,9 +35,18 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
 
     private Activity activity;
 
+    private boolean useOld = false;
+
     //final int color = G.sysColor();
     //final int defaultColor = Color.WHITE;
 
+    public AppListArrayAdapter(MainActivity activity, Context context, List<PackageInfoData> apps, boolean useOld) {
+        super(context, R.layout.main_list_old, apps);
+        this.useOld = true;
+        this.activity = activity;
+        this.context = context;
+        this.listApps = apps;
+    }
     public AppListArrayAdapter(MainActivity activity, Context context, List<PackageInfoData> apps) {
         super(context, R.layout.main_list, apps);
         this.activity = activity;
@@ -51,7 +60,11 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
         LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
         if (convertView == null) {
             // Inflate a new view
-            convertView = inflater.inflate(R.layout.main_list, parent, false);
+            if(useOld) {
+                convertView = inflater.inflate(R.layout.main_list_old, parent, false);
+            } else{
+                convertView = inflater.inflate(R.layout.main_list, parent, false);
+            }
             holder = new AppStateHolder();
             holder.box_wifi = (CheckBox) convertView.findViewById(R.id.itemcheck_wifi);
 
@@ -66,6 +79,9 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
             }
             if (G.enableVPN()) {
                 holder.box_vpn = addSupport(convertView, true, R.id.itemcheck_vpn);
+            }
+            if (G.enableTether()) {
+                holder.box_tether = addSupport(convertView, true, R.id.itemcheck_tether);
             }
             if (G.enableLAN()) {
                 holder.box_lan = addSupport(convertView, true, R.id.itemcheck_lan);
@@ -97,6 +113,9 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
             if (G.enableVPN()) {
                 addSupport(convertView, false, R.id.itemcheck_vpn);
             }
+            if (G.enableTether()) {
+                addSupport(convertView, false, R.id.itemcheck_tether);
+            }
             if (G.enableLAN()) {
                 addSupport(convertView, false, R.id.itemcheck_lan);
             }
@@ -122,13 +141,9 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
         }
 
         final int id = holder.app.uid;
-        holder.text.setOnClickListener(v -> {
-            Intent intent = new Intent(context, AppDetailActivity.class);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            intent.putExtra("package", holder.app.pkgName);
-            intent.putExtra("appid", id);
-            context.startActivity(intent);
-        });
+        holder.icon.setOnClickListener(v -> StartAppDetailActivityIntent(v,holder,id));
+        holder.text.setOnClickListener(v -> StartAppDetailActivityIntent(v,holder,id));
+
 
         ApplicationInfo info = holder.app.appinfo;
         if (info != null && (info.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
@@ -141,7 +156,7 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
 
         if (!G.disableIcons()) {
             if(holder.app.pkgName.startsWith("dev.afwall.special.")) {
-                holder.icon.setImageDrawable(convertView.getContext().getResources().getDrawable(R.drawable.ic_android_white_24dp));
+                holder.icon.setImageDrawable(context.getDrawable(R.drawable.ic_unknown));
             } else {
                 holder.icon.setImageDrawable(holder.app.cached_icon);
                 if (!holder.app.icon_loaded && info != null) {
@@ -175,6 +190,9 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
         if (G.enableVPN()) {
             holder.box_vpn = addSupport(holder.box_vpn, holder.app, 1);
         }
+        if (G.enableTether()) {
+            holder.box_tether = addSupport(holder.box_tether, holder.app, 6);
+        }
         if (G.enableLAN()) {
             holder.box_lan = addSupport(holder.box_lan, holder.app, 2);
         }
@@ -185,6 +203,14 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
         addEventListenter(holder);
 
         return convertView;
+    }
+
+    private void StartAppDetailActivityIntent(View v, AppStateHolder holder, Integer id) {
+        Intent intent = new Intent(context, AppDetailActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra("package", holder.app.pkgName);
+        intent.putExtra("appid", id);
+        context.startActivity(intent);
     }
 
     private void addEventListenter(final AppStateHolder holder) {
@@ -274,6 +300,23 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
             });
         }
 
+        if (holder.box_tether != null) {
+            holder.box_tether.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(CompoundButton compoundButton, boolean isChecked) {
+                    if(compoundButton.isPressed()) {
+                        if (holder.app.selected_tether != isChecked) {
+                            holder.app.selected_tether = isChecked;
+                            MainActivity.dirty = true;
+                            notifyDataSetChanged();
+                            //Log.i(TAG, "Application state changed: " + holder.app.pkgName);
+                            //MainActivity.addToQueue(holder.app);
+                        }
+                    }
+                }
+            });
+        }
+
         if (holder.box_tor != null) {
             holder.box_tor.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -301,6 +344,9 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
                     break;
                 case 1:
                     check.setChecked(app.selected_vpn);
+                    break;
+                case 6:
+                    check.setChecked(app.selected_tether);
                     break;
                 case 2:
                     check.setChecked(app.selected_lan);
@@ -335,6 +381,7 @@ public class AppListArrayAdapter extends ArrayAdapter<PackageInfoData> {
         private CheckBox box_3g;
         private CheckBox box_roam;
         private CheckBox box_vpn;
+        private CheckBox box_tether;
         private CheckBox box_tor;
         private TextView text;
         private ImageView icon;

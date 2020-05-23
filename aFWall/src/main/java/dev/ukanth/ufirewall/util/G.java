@@ -80,6 +80,7 @@ public class G extends Application implements Application.ActivityLifecycleCallb
     private static final String REG_DO = "ipurchaseddonatekey";
     private static final String ENABLE_ROAM = "enableRoam";
     private static final String ENABLE_VPN = "enableVPN";
+    private static final String ENABLE_TETHER = "enableTether";
     private static final String ENABLE_LAN = "enableLAN";
     private static final String ENABLE_TOR = "enableTor";
     private static final String ENABLE_IPV6 = "enableIPv6";
@@ -112,9 +113,10 @@ public class G extends Application implements Application.ActivityLifecycleCallb
     private static final String PRIMARY_DARK_COLOR = "primaryColor";
 
     private static final String ACTIVE_RULES = "activeRules";
-    private static final String ACTIVE_NOTIFICATION = "activeNotification";
+    //private static final String ACTIVE_NOTIFICATION = "activeNotification";
     private static final String PROFILE_SWITCH = "applyOnSwitchProfiles";
     private static final String LOG_TARGET = "logTarget";
+    private static final String LOG_TARGETS = "logTargets";
     private static final String SHOW_HOST = "showHostName";
     private static final String APP_VERSION = "appVersion";
     private static final String DNS_PROXY = "dns_value";
@@ -343,14 +345,14 @@ public class G extends Application implements Application.ActivityLifecycleCallb
         return val;
     }
 
-    public static boolean activeNotification() {
+   /* public static boolean activeNotification() {
         return gPrefs.getBoolean(ACTIVE_NOTIFICATION, true);
     }
 
     public static boolean activeNotification(boolean val) {
         gPrefs.edit().putBoolean(ACTIVE_NOTIFICATION, val).commit();
         return val;
-    }
+    }*/
 
     public static boolean showLogToasts() {
         return gPrefs.getBoolean(SHOW_LOG_TOAST, false);
@@ -605,14 +607,24 @@ public class G extends Application implements Application.ActivityLifecycleCallb
         return gPrefs.getBoolean(PROFILE_SWITCH, false);
     }
 
+    public static String logTargets() {
+        return gPrefs.getString(LOG_TARGETS, null);
+    }
+
+    public static String logTargets(String val) {
+        gPrefs.edit().putString(LOG_TARGETS, val).commit();
+        return val;
+    }
+
     public static String logTarget() {
-        return gPrefs.getString(LOG_TARGET, "");
+        return gPrefs.getString(LOG_TARGET, "LOG");
     }
 
     public static String logTarget(String val) {
         gPrefs.edit().putString(LOG_TARGET, val).commit();
         return val;
     }
+
 
     public static void saveSelectedFilter(int i) {
         gPrefs.edit().putInt(SELECTED_FILTER, i).commit();
@@ -681,6 +693,15 @@ public class G extends Application implements Application.ActivityLifecycleCallb
 
     public static boolean enableVPN(boolean val) {
         gPrefs.edit().putBoolean(ENABLE_VPN, val).commit();
+        return val;
+    }
+
+    public static boolean enableTether() {
+        return gPrefs.getBoolean(ENABLE_TETHER, false);
+    }
+
+    public static boolean enableTether(boolean val) {
+        gPrefs.edit().putBoolean(ENABLE_TETHER, val).commit();
         return val;
     }
 

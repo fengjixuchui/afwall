@@ -56,7 +56,7 @@ import eu.chainfire.libsuperuser.Shell;
 import static dev.ukanth.ufirewall.service.RootShellService.ShellState.INIT;
 
 
-public class RootShellService extends Service {
+public class RootShellService extends Service implements Cloneable {
 
     public static final String TAG = "AFWall";
     public static final int NOTIFICATION_ID = 33347;
@@ -70,8 +70,18 @@ public class RootShellService extends Service {
     private static Context mContext;
     private static NotificationManager notificationManager;
     private static ShellState rootState = INIT;
-    private static LinkedList<RootCommand> waitQueue = new LinkedList<RootCommand>();
+    private static LinkedList<RootCommand> waitQueue = new LinkedList<>();
     private static NotificationCompat.Builder builder;
+
+    @Override
+    public RootShellService clone() {
+        RootShellService rootShellService = null;
+        try {
+            rootShellService = (RootShellService) super.clone();
+        } catch (CloneNotSupportedException e) {
+        }
+        return rootShellService;
+    }
 
     private static void complete(final RootCommand state, int exitCode) {
         if (enableProfiling) {
@@ -108,19 +118,17 @@ public class RootShellService extends Service {
                 }
                 break;
             }
-
             if (state != null) {
+                //same as last one. ignore it
                 Log.i(TAG, "Start processing next state");
                 if (enableProfiling) {
                     state.startTime = new Date();
                 }
-
                 if (rootState == ShellState.FAIL) {
                     // if we don't have root, abort all queued commands
                     complete(state, EXIT_NO_ROOT_ACCESS);
                     continue;
                 } else if (rootState == ShellState.READY) {
-                    //Log.i(TAG, "Total commamds: #" + state.getCommmands().size());
                     rootState = ShellState.BUSY;
                     if (G.isRun()) {
                         createNotification(mContext);
@@ -128,8 +136,6 @@ public class RootShellService extends Service {
                     processCommands(state);
                 }
             }
-
-
         } while (false);
     }
 
@@ -137,7 +143,7 @@ public class RootShellService extends Service {
         if (state.commandIndex < state.getCommmands().size() && state.getCommmands().get(state.commandIndex) != null) {
             String command = state.getCommmands().get(state.commandIndex);
             //not to send conflicting status
-            if(!state.isv6) {
+            if (!state.isv6) {
                 sendUpdate(state);
             }
             if (command != null) {
@@ -205,7 +211,7 @@ public class RootShellService extends Service {
     private static void sendUpdate(final RootCommand state2) {
         new Thread(() -> {
             Intent broadcastIntent = new Intent();
-            broadcastIntent.setAction("UPDATEUI");
+            broadcastIntent.setAction("UPDATEUI4");
             broadcastIntent.putExtra("SIZE", state2.getCommmands().size());
             broadcastIntent.putExtra("INDEX", state2.commandIndex);
             LocalBroadcastManager.getInstance(mContext).sendBroadcast(broadcastIntent);
@@ -241,7 +247,7 @@ public class RootShellService extends Service {
 
         int notifyType = G.getNotificationPriority();
 
-        Notification notification = builder.setSmallIcon(R.drawable.ic_apply_notification)
+        Notification notification = builder.setSmallIcon(R.drawable.ic_apply)
                 .setAutoCancel(false)
                 .setContentTitle(context.getString(R.string.applying_rules))
                 .setTicker(context.getString(R.string.app_name))
@@ -280,12 +286,7 @@ public class RootShellService extends Service {
         Debug.setLogTypeEnabled(Debug.LOG_ALL, false);
         Debug.setLogTypeEnabled(Debug.LOG_GENERAL, false);
         Debug.setSanityChecksEnabled(false);
-        Debug.setOnLogListener(new Debug.OnLogListener() {
-            @Override
-            public void onLog(int type, String typeIndicator, String message) {
-                Log.i(TAG, "[libsuperuser] " + message);
-            }
-        });
+        Debug.setOnLogListener((type, typeIndicator, message) -> Log.i(TAG, "[libsuperuser] " + message));
     }
 
 
@@ -294,7 +295,6 @@ public class RootShellService extends Service {
         setupLogging();
         //start only rootSession is null
         if (rootSession == null) {
-
             rootSession = new Shell.Builder().
                     useSU().
                     setWantSTDERR(true).
@@ -320,8 +320,12 @@ public class RootShellService extends Service {
             }
             rootState = ShellState.BUSY;
             startShellInBackground();
-            Intent intent = new Intent(context, RootShellService.class);
-            context.startService(intent);
+            try {
+                Intent intent = new Intent(context, RootShellService.class);
+                context.startService(intent);
+            } catch (Exception e){
+                Log.e(TAG, e.getMessage(),e);
+            }
         }
     }
 
@@ -334,7 +338,13 @@ public class RootShellService extends Service {
         if (mContext == null) {
             mContext = ctx.getApplicationContext();
         }
+        //already in memory and applied
+        //add it to queue
+        Log.d(TAG, "Hashing...." + state.isv6);
+        Log.d(TAG, state.hash + "");
+
         waitQueue.add(state);
+
         if (rootState == INIT || (rootState == ShellState.FAIL && state.reopenShell)) {
             reOpenShell(ctx);
         } else if (rootState != ShellState.BUSY) {
@@ -351,7 +361,7 @@ public class RootShellService extends Service {
                     }
                     runNextSubmission();
                 }
-            }, 5000);
+            }, 10000);
         }
     }
 

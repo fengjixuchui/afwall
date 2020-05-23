@@ -58,6 +58,7 @@ import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.TaskStackBuilder;
+import android.text.TextUtils;
 import android.util.Base64;
 import android.util.SparseArray;
 import android.widget.Toast;
@@ -101,8 +102,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -172,6 +178,7 @@ public final class Api {
     public static final String PREF_WIFI_PKG_UIDS = "AllowedPKGWifi_UIDS";
     public static final String PREF_ROAMING_PKG_UIDS = "AllowedPKGRoaming_UIDS";
     public static final String PREF_VPN_PKG_UIDS = "AllowedPKGVPN_UIDS";
+    public static final String PREF_TETHER_PKG_UIDS = "AllowedPKGTether_UIDS";
     public static final String PREF_LAN_PKG_UIDS = "AllowedPKGLAN_UIDS";
     public static final String PREF_TOR_PKG_UIDS = "AllowedPKGTOR_UIDS";
     public static final String PREF_CUSTOMSCRIPT = "CustomScript";
@@ -194,16 +201,18 @@ public final class Api {
     private static final int ROAM_EXPORT = 2;
     // Messages
     private static final int VPN_EXPORT = 3;
+    private static final int TETHER_EXPORT = 6;
     private static final int LAN_EXPORT = 4;
     private static final int TOR_EXPORT = 5;
     private static final String ITFS_WIFI[] = InterfaceTracker.ITFS_WIFI;
     private static final String ITFS_3G[] = InterfaceTracker.ITFS_3G;
     private static final String ITFS_VPN[] = InterfaceTracker.ITFS_VPN;
+    private static final String ITFS_TETHER[] = InterfaceTracker.ITFS_TETHER;
     // iptables can exit with status 4 if two processes tried to update the same table
     private static final int IPTABLES_TRY_AGAIN = 4;
     private static final String dynChains[] = {"-3g-postcustom", "-3g-fork", "-wifi-postcustom", "-wifi-fork"};
     private static final String natChains[] = {"", "-tor-check", "-tor-filter"};
-    private static final String staticChains[] = {"", "-input", "-3g", "-wifi", "-reject", "-vpn", "-3g-tether", "-3g-home", "-3g-roam", "-wifi-tether", "-wifi-wan", "-wifi-lan", "-tor", "-tor-reject"};
+    private static final String staticChains[] = {"", "-input", "-3g", "-wifi", "-reject", "-vpn", "-3g-tether", "-3g-home", "-3g-roam", "-wifi-tether", "-wifi-wan", "-wifi-lan", "-tor", "-tor-reject", "-tether"};
     /**
      * @brief Special user/group IDs that aren't associated with
      * any particular app.
@@ -472,10 +481,10 @@ public final class Api {
         // this can be changed dynamically through the Firewall Logs activity
 
         if (G.enableLogService() && G.logTarget() != null) {
-            if (G.logTarget().equals("LOG")) {
+            if (G.logTarget().trim().equals("LOG")) {
                 //cmds.add("-A " + AFWALL_CHAIN_NAME  + " -m limit --limit 1000/min -j LOG --log-prefix \"{AFL-ALLOW}\" --log-level 4 --log-uid");
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-reject" + " -m limit --limit 1000/min -j LOG --log-prefix \"{AFL}\" --log-level 4 --log-uid");
-            } else if (G.logTarget().equals("NFLOG")) {
+            } else if (G.logTarget().trim().equals("NFLOG")) {
                 //cmds.add("-A " + AFWALL_CHAIN_NAME + " -j NFLOG --nflog-prefix \"{AFL-ALLOW}\" --nflog-group 40");
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-reject" + " -j NFLOG --nflog-prefix \"{AFL}\" --nflog-group 40");
             }
@@ -546,7 +555,7 @@ public final class Api {
                 addRuleForUsers(cmds, new String[]{"dhcp", "wifi"}, "-A " + AFWALL_CHAIN_NAME + "-wifi-postcustom", "-j RETURN");
             }
 
-            if (cfg.isTethered) {
+            if (cfg.isWifiTethered) {
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-wifi-postcustom -j " + AFWALL_CHAIN_NAME + "-wifi-tether");
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-3g-postcustom -j " + AFWALL_CHAIN_NAME + "-3g-tether");
             } else {
@@ -554,7 +563,9 @@ public final class Api {
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-3g-postcustom -j " + AFWALL_CHAIN_NAME + "-3g-fork");
             }
 
-            if (G.enableLAN() && !cfg.isTethered) {
+            // TODO: tether and Usb tether
+
+            if (G.enableLAN() && !cfg.isWifiTethered) {
                 if (ipv6) {
                     if (!cfg.lanMaskV6.equals("")) {
                         Log.i(TAG, "ipv6 found: " + G.enableIPv6() + "," + cfg.lanMaskV6);
@@ -766,6 +777,13 @@ public final class Api {
                     cmds.add("-A " + AFWALL_CHAIN_NAME + " -m mark --mark 0x40/0xfff8 -g " + AFWALL_CHAIN_NAME + "-vpn");
                 }
             }
+
+            if (G.enableTether()) {
+                for (final String itf : ITFS_TETHER) {
+                    cmds.add("-A " + AFWALL_CHAIN_NAME + " -o " + itf + " -j " + AFWALL_CHAIN_NAME + "-tether");
+                }
+            }
+
             for (final String itf : ITFS_WIFI) {
                 cmds.add("-A " + AFWALL_CHAIN_NAME + " -o " + itf + " -j " + AFWALL_CHAIN_NAME + "-wifi");
             }
@@ -807,11 +825,12 @@ public final class Api {
             if (whitelist) {
                 cmds.add("-A " + AFWALL_CHAIN_NAME + "-wifi-lan -p udp --dport 53 -j RETURN");
                 //bug fix allow dns to be open on Pie for all connection type
-                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O_MR1) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     cmds.add("-A " + AFWALL_CHAIN_NAME + "-wifi-wan" + " -p udp --dport 53" + " -j RETURN");
                     cmds.add("-A " + AFWALL_CHAIN_NAME + "-3g-home" + " -p udp --dport 53" + " -j RETURN");
                     cmds.add("-A " + AFWALL_CHAIN_NAME + "-3g-roam" + " -p udp --dport 53" + " -j RETURN");
                     cmds.add("-A " + AFWALL_CHAIN_NAME + "-vpn" + " -p udp --dport 53" + " -j RETURN");
+                    cmds.add("-A " + AFWALL_CHAIN_NAME + "-tether" + " -p udp --dport 53" + " -j RETURN");
                 }
             }
 
@@ -822,6 +841,7 @@ public final class Api {
             addRulesForUidlist(cmds, ruleDataSet.wifiList, AFWALL_CHAIN_NAME + "-wifi-wan", whitelist);
             addRulesForUidlist(cmds, ruleDataSet.lanList, AFWALL_CHAIN_NAME + "-wifi-lan", whitelist);
             addRulesForUidlist(cmds, ruleDataSet.vpnList, AFWALL_CHAIN_NAME + "-vpn", whitelist);
+            addRulesForUidlist(cmds, ruleDataSet.tetherList, AFWALL_CHAIN_NAME + "-tether", whitelist);
 
 
             if (G.enableTor()) {
@@ -884,35 +904,37 @@ public final class Api {
     public static void applySavedIptablesRules(Context ctx, boolean showErrors, RootCommand callback) {
         Log.i(TAG, "Using applySavedIptablesRules");
         RuleDataSet dataSet = getDataSet();
-        Thread t2 = null;
+        boolean[] applied = {false, false};
+
         List<String> ipv4cmds = new ArrayList<String>();
         List<String> ipv6cmds = new ArrayList<String>();
-        applyIptablesRulesImpl(ctx, dataSet, showErrors, ipv4cmds, false);
-        Thread t1 = new Thread(() -> applySavedIp4tablesRules(ctx, ipv4cmds, callback));
-
-        if (G.enableIPv6()) {
-            applyIptablesRulesImpl(ctx, dataSet, showErrors, ipv6cmds, true);
-            t2 = new Thread(() -> applySavedIp6tablesRules(ctx, ipv6cmds, callback));
-
-        }
-
+        Thread t2 = null;
+        Thread t1 = new Thread(() -> {
+            callback.hash = ipv6cmds.hashCode();
+            applyIptablesRulesImpl(ctx, dataSet, showErrors, ipv4cmds, false);
+            applied[0] = applySavedIp4tablesRules(ctx, ipv4cmds, callback);
+        });
         t1.start();
+
         if (G.enableIPv6()) {
+            t2 = new Thread(() -> {
+                applyIptablesRulesImpl(ctx, dataSet, showErrors, ipv6cmds, true);
+                applySavedIp6tablesRules(ctx, ipv6cmds, callback.clone().setHash(ipv6cmds.hashCode()));
+            });
             t2.start();
         }
 
         try {
             t1.join();
-            if (G.enableIPv6() && t2 != null) {
+            if (G.enableIPv6()&& t2 != null) {
                 t2.join();
             }
         } catch (InterruptedException e) {
-
         }
         //boolean returnValue = G.enableIPv6() ? (applied[0] && applied[1]) : applied[0];
         rulesUpToDate = true;
-        //return returnValue;
     }
+
 
     private static RuleDataSet getDataSet() {
         initSpecial();
@@ -921,6 +943,7 @@ public final class Api {
         final String savedPkg_3g_uid = G.pPrefs.getString(PREF_3G_PKG_UIDS, "");
         final String savedPkg_roam_uid = G.pPrefs.getString(PREF_ROAMING_PKG_UIDS, "");
         final String savedPkg_vpn_uid = G.pPrefs.getString(PREF_VPN_PKG_UIDS, "");
+        final String savedPkg_tether_uid = G.pPrefs.getString(PREF_TETHER_PKG_UIDS, "");
         final String savedPkg_lan_uid = G.pPrefs.getString(PREF_LAN_PKG_UIDS, "");
         final String savedPkg_tor_uid = G.pPrefs.getString(PREF_TOR_PKG_UIDS, "");
 
@@ -928,6 +951,7 @@ public final class Api {
                 getListFromPref(savedPkg_3g_uid),
                 getListFromPref(savedPkg_roam_uid),
                 getListFromPref(savedPkg_vpn_uid),
+                getListFromPref(savedPkg_tether_uid),
                 getListFromPref(savedPkg_lan_uid),
                 getListFromPref(savedPkg_tor_uid));
 
@@ -948,7 +972,7 @@ public final class Api {
         }
         try {
             Log.i(TAG, "Using applySaved4IptablesRules");
-            callback.setRetryExitCode(IPTABLES_TRY_AGAIN).run(ctx, cmds);
+            callback.setRetryExitCode(IPTABLES_TRY_AGAIN).run(ctx, cmds,false);
             return true;
         } catch (Exception e) {
             Log.d(TAG, "Exception while applying rules: " + e.getMessage());
@@ -964,7 +988,7 @@ public final class Api {
         }
         try {
             Log.i(TAG, "Using applySavedIp6tablesRules");
-            callback.setRetryExitCode(IPTABLES_TRY_AGAIN).run(ctx, cmds);
+            callback.setRetryExitCode(IPTABLES_TRY_AGAIN).run(ctx, cmds,true);
             return true;
         } catch (Exception e) {
             Log.d(TAG, "Exception while applying rules: " + e.getMessage());
@@ -1018,6 +1042,7 @@ public final class Api {
             HashSet newpkg_3g = new HashSet();
             HashSet newpkg_roam = new HashSet();
             HashSet newpkg_vpn = new HashSet();
+            HashSet newpkg_tether = new HashSet();
             HashSet newpkg_lan = new HashSet();
             HashSet newpkg_tor = new HashSet();
 
@@ -1047,7 +1072,13 @@ public final class Api {
                             if (!store) newpkg_vpn.add(-apps.get(i).uid);
                         }
                     }
-
+                    if (G.enableTether()) {
+                        if (apps.get(i).selected_tether) {
+                            newpkg_tether.add(apps.get(i).uid);
+                        } else {
+                            if (!store) newpkg_tether.add(-apps.get(i).uid);
+                        }
+                    }
                     if (G.enableLAN()) {
                         if (apps.get(i).selected_lan) {
                             newpkg_lan.add(apps.get(i).uid);
@@ -1069,6 +1100,7 @@ public final class Api {
             String data = android.text.TextUtils.join("|", newpkg_3g);
             String roam = android.text.TextUtils.join("|", newpkg_roam);
             String vpn = android.text.TextUtils.join("|", newpkg_vpn);
+            String tether = android.text.TextUtils.join("|", newpkg_tether);
             String lan = android.text.TextUtils.join("|", newpkg_lan);
             String tor = android.text.TextUtils.join("|", newpkg_tor);
             // save the new list of UIDs
@@ -1079,6 +1111,7 @@ public final class Api {
                 edit.putString(PREF_3G_PKG_UIDS, data);
                 edit.putString(PREF_ROAMING_PKG_UIDS, roam);
                 edit.putString(PREF_VPN_PKG_UIDS, vpn);
+                edit.putString(PREF_TETHER_PKG_UIDS, tether);
                 edit.putString(PREF_LAN_PKG_UIDS, lan);
                 edit.putString(PREF_TOR_PKG_UIDS, tor);
                 edit.commit();
@@ -1087,6 +1120,7 @@ public final class Api {
                         new ArrayList<>(newpkg_3g),
                         new ArrayList<>(newpkg_roam),
                         new ArrayList<>(newpkg_vpn),
+                        new ArrayList<>(newpkg_tether),
                         new ArrayList<>(newpkg_lan),
                         new ArrayList<>(newpkg_tor));
             }
@@ -1133,14 +1167,16 @@ public final class Api {
             for (String s : natChains) {
                 cmdsv4.add("-t nat -F " + AFWALL_CHAIN_NAME + s);
             }
-            cmdsv4.add("-t nat -D OUTPUT -j " + AFWALL_CHAIN_NAME);
+            cmdsv4.add("#NOCHK# -t nat -D OUTPUT -j " + AFWALL_CHAIN_NAME);
+        } else {
+            cmdsv4.add("#NOCHK# -D OUTPUT -j " + AFWALL_CHAIN_NAME);
         }
 
         //make sure reset the OUTPUT chain to accept state.
         cmds.add("-P OUTPUT ACCEPT");
 
         //Delete only when the afwall chain exist !
-        cmds.add("-D OUTPUT -j " + AFWALL_CHAIN_NAME);
+        //cmds.add("-D OUTPUT -j " + AFWALL_CHAIN_NAME);
 
         if (G.enableInbound()) {
             cmds.add("-D INPUT -j " + AFWALL_CHAIN_NAME + "-input");
@@ -1172,7 +1208,7 @@ public final class Api {
 
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG,e.getMessage(),e);
             return false;
         }
     }
@@ -1218,6 +1254,7 @@ public final class Api {
         try {
             Set<String> uids = G.storedPid();
             if (uids != null && uids.size() > 0) {
+                Log.i(TAG, "log cleanup using uid");
                 Shell.Interactive tempSession = new Shell.Builder().useSU().open();
                 for (String uid : uids) {
                     Log.i(Api.TAG, "Cleaning up previous uid: " + uid);
@@ -1228,17 +1265,18 @@ public final class Api {
                     tempSession.kill();
                     tempSession.close();
                 }
-            } else {
-                Shell.Interactive tempSession = new Shell.Builder().useSU().open();
-                Log.i(Api.TAG, "Cleaning up log watches");
-                tempSession.addCommand("killall nflog");
-                tempSession.addCommand("pkill -9 -f \"aflogshellb\"");
-                tempSession.addCommand("pkill -9 -f \"aflogshell\"");
-                //try using our busybox incase if pkill is not found
-                String bbPath = getBusyBoxPath(ctx, true);
-                tempSession.addCommand(bbPath + " pkill -9 -f \"aflogshellb\"");
-                tempSession.addCommand(bbPath + " pkill -9 -f \"aflogshell\"");
             }
+            Shell.Interactive tempSession = new Shell.Builder().useSU().open();
+            Log.i(Api.TAG, "Cleaning up log watches using shell");
+            tempSession.addCommand("killall nflog");
+            tempSession.addCommand("pkill -9 -f \"aflogshellb\"");
+            tempSession.addCommand("pkill -9 -f \"aflogshell\"");
+            //try using our busybox incase if pkill is not found
+            String bbPath = getBusyBoxPath(ctx, true);
+            tempSession.addCommand(bbPath + " pkill -9 -f \"nflog\"");
+            tempSession.addCommand(bbPath + " pkill -9 -f \"aflogshellb\"");
+            tempSession.addCommand(bbPath + " pkill -9 -f \"aflogshell\"");
+            //TODO: cleanup shell
         } catch (ClassCastException e) {
             Log.e(TAG, "ClassCastException in cleanupUid: " + e.getMessage());
         } catch (Exception e) {
@@ -1392,6 +1430,7 @@ public final class Api {
         String savedPkg_3g_uid = prefs.getString(PREF_3G_PKG_UIDS, "");
         String savedPkg_roam_uid = prefs.getString(PREF_ROAMING_PKG_UIDS, "");
         String savedPkg_vpn_uid = prefs.getString(PREF_VPN_PKG_UIDS, "");
+        String savedPkg_tether_uid = prefs.getString(PREF_TETHER_PKG_UIDS, "");
         String savedPkg_lan_uid = prefs.getString(PREF_LAN_PKG_UIDS, "");
         String savedPkg_tor_uid = prefs.getString(PREF_TOR_PKG_UIDS, "");
 
@@ -1399,6 +1438,7 @@ public final class Api {
         List<Integer> selected_3g;
         List<Integer> selected_roam = new ArrayList<>();
         List<Integer> selected_vpn = new ArrayList<>();
+        List<Integer> selected_tether = new ArrayList<>();
         List<Integer> selected_lan = new ArrayList<>();
         List<Integer> selected_tor = new ArrayList<>();
 
@@ -1411,6 +1451,9 @@ public final class Api {
         }
         if (G.enableVPN()) {
             selected_vpn = getListFromPref(savedPkg_vpn_uid);
+        }
+        if (G.enableTether()) {
+            selected_tether = getListFromPref(savedPkg_tether_uid);
         }
         if (G.enableLAN()) {
             selected_lan = getListFromPref(savedPkg_lan_uid);
@@ -1443,7 +1486,7 @@ public final class Api {
                 }
             }
 
-
+            //use pm list packages -f -U --user 10
             List<ApplicationInfo> installed = pkgmanager.getInstalledApplications(PackageManager.GET_META_DATA);
             SparseArray<PackageInfoData> syncMap = new SparseArray<>();
             Editor edit = cachePrefs.edit();
@@ -1518,6 +1561,9 @@ public final class Api {
                 if (G.enableVPN() && !app.selected_vpn && Collections.binarySearch(selected_vpn, app.uid) >= 0) {
                     app.selected_vpn = true;
                 }
+                if (G.enableTether() && !app.selected_tether && Collections.binarySearch(selected_tether, app.uid) >= 0) {
+                    app.selected_tether = true;
+                }
                 if (G.enableLAN() && !app.selected_lan && Collections.binarySearch(selected_lan, app.uid) >= 0) {
                     app.selected_lan = true;
                 }
@@ -1544,6 +1590,9 @@ public final class Api {
                     }
                     if (G.enableVPN() && !app.selected_vpn && Collections.binarySearch(selected_vpn, app.uid) >= 0) {
                         app.selected_vpn = true;
+                    }
+                    if (G.enableTether() && !app.selected_tether && Collections.binarySearch(selected_tether, app.uid) >= 0) {
+                        app.selected_tether = true;
                     }
                     if (G.enableLAN() && !app.selected_lan && Collections.binarySearch(selected_lan, app.uid) >= 0) {
                         app.selected_lan = true;
@@ -1579,6 +1628,9 @@ public final class Api {
                     }
                     if (G.enableVPN() && !app.selected_vpn && Collections.binarySearch(selected_vpn, app.uid) >= 0) {
                         app.selected_vpn = true;
+                    }
+                    if (G.enableTether() && !app.selected_tether && Collections.binarySearch(selected_tether, app.uid) >= 0) {
+                        app.selected_tether = true;
                     }
                     if (G.enableLAN() && !app.selected_lan && Collections.binarySearch(selected_lan, app.uid) >= 0) {
                         app.selected_lan = true;
@@ -1649,23 +1701,27 @@ public final class Api {
         try {
             for (Integer integer : uid1) {
                 int appUid = Integer.parseInt(integer + "" + apinfo.uid + "");
-                String[] pkgs = pkgmanager.getPackagesForUid(appUid);
-                if (pkgs != null) {
-                    PackageInfoData app = new PackageInfoData();
-                    app.uid = appUid;
-                    app.installTime = new File(apinfo.sourceDir).lastModified();
-                    app.names = new ArrayList<String>();
-                    app.names.add(name + "(M)");
-                    app.appinfo = apinfo;
-                    if (app.appinfo != null && (app.appinfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                        //user app
-                        app.appType = 0;
-                    } else {
-                        //system app
-                        app.appType = 1;
+                try{
+                    String[] pkgs = pkgmanager.getPackagesForUid(appUid);
+                    if (pkgs != null) {
+                        PackageInfoData app = new PackageInfoData();
+                        app.uid = appUid;
+                        app.installTime = new File(apinfo.sourceDir).lastModified();
+                        app.names = new ArrayList<String>();
+                        app.names.add(name + "(M)");
+                        app.appinfo = apinfo;
+                        if (app.appinfo != null && (app.appinfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
+                            //user app
+                            app.appType = 0;
+                        } else {
+                            //system app
+                            app.appType = 1;
+                        }
+                        app.pkgName = apinfo.packageName;
+                        syncMap.put(appUid, app);
                     }
-                    app.pkgName = apinfo.packageName;
-                    syncMap.put(appUid, app);
+                }catch (Exception e) {
+                    Log.e(TAG, e.getMessage(), e);
                 }
             }
         } catch (Exception e) {
@@ -2185,10 +2241,8 @@ public final class Api {
                 notification.priority = NotificationCompat.PRIORITY_MIN;
                 break;
         }
-        if (G.activeNotification()) {
-            notification.flags |= Notification.FLAG_ONGOING_EVENT | Notification.FLAG_FOREGROUND_SERVICE | Notification.FLAG_NO_CLEAR;
-            manager.notify(NOTIFICATION_ID, notification);
-        }
+        notification.flags |= Notification.FLAG_ONGOING_EVENT | Notification.FLAG_FOREGROUND_SERVICE | Notification.FLAG_NO_CLEAR;
+        manager.notify(NOTIFICATION_ID, notification);
     }
 
     private static boolean removePackageRef(Context ctx, String pkg, int pkgRemoved, Editor editor, String store) {
@@ -2306,9 +2360,10 @@ public final class Api {
         String savedPks_3g = prefs.getString(PREF_3G_PKG_UIDS, "");
         String savedPks_roam = prefs.getString(PREF_ROAMING_PKG_UIDS, "");
         String savedPks_vpn = prefs.getString(PREF_VPN_PKG_UIDS, "");
+        String savedPks_tether = prefs.getString(PREF_TETHER_PKG_UIDS, "");
         String savedPks_lan = prefs.getString(PREF_LAN_PKG_UIDS, "");
         String savedPks_tor = prefs.getString(PREF_TOR_PKG_UIDS, "");
-        boolean wChanged, rChanged, gChanged, vChanged, tChanged = false;
+        boolean wChanged, rChanged, gChanged, vChanged, bChanged, lChanged, tChanged;
         // look for the removed application in the "wi-fi" list
         wChanged = removePackageRef(ctx, savedPks_wifi, pkgRemoved, editor, PREF_WIFI_PKG_UIDS);
         // look for the removed application in the "3g" list
@@ -2317,12 +2372,14 @@ public final class Api {
         rChanged = removePackageRef(ctx, savedPks_roam, pkgRemoved, editor, PREF_ROAMING_PKG_UIDS);
         //  look for the removed application in vpn list
         vChanged = removePackageRef(ctx, savedPks_vpn, pkgRemoved, editor, PREF_VPN_PKG_UIDS);
+        //  look for the removed application in tether list
+        bChanged = removePackageRef(ctx, savedPks_tether, pkgRemoved, editor, PREF_TETHER_PKG_UIDS);
         //  look for the removed application in lan list
-        vChanged = removePackageRef(ctx, savedPks_lan, pkgRemoved, editor, PREF_LAN_PKG_UIDS);
+        lChanged = removePackageRef(ctx, savedPks_lan, pkgRemoved, editor, PREF_LAN_PKG_UIDS);
         //  look for the removed application in tor list
         tChanged = removePackageRef(ctx, savedPks_tor, pkgRemoved, editor, PREF_TOR_PKG_UIDS);
 
-        if (wChanged || gChanged || rChanged || vChanged || tChanged) {
+        if (wChanged || gChanged || rChanged || vChanged || bChanged || lChanged || tChanged) {
             editor.commit();
             if (isEnabled(ctx)) {
                 // .. and also re-apply the rules if the firewall is enabled
@@ -2482,6 +2539,9 @@ public final class Api {
                 if (apps.get(i).selected_vpn) {
                     updateExportPackage(exportMap, apps.get(i).pkgName, VPN_EXPORT);
                 }
+                if (apps.get(i).selected_tether) {
+                    updateExportPackage(exportMap, apps.get(i).pkgName, TETHER_EXPORT);
+                }
                 if (apps.get(i).selected_lan) {
                     updateExportPackage(exportMap, apps.get(i).pkgName, LAN_EXPORT);
                 }
@@ -2578,6 +2638,7 @@ public final class Api {
         updatePackage(ctx, prefs.getString(PREF_3G_PKG_UIDS, ""), exportMap, DATA_EXPORT);
         updatePackage(ctx, prefs.getString(PREF_ROAMING_PKG_UIDS, ""), exportMap, ROAM_EXPORT);
         updatePackage(ctx, prefs.getString(PREF_VPN_PKG_UIDS, ""), exportMap, VPN_EXPORT);
+        updatePackage(ctx, prefs.getString(PREF_TETHER_PKG_UIDS, ""), exportMap, TETHER_EXPORT);
         updatePackage(ctx, prefs.getString(PREF_LAN_PKG_UIDS, ""), exportMap, LAN_EXPORT);
         updatePackage(ctx, prefs.getString(PREF_TOR_PKG_UIDS, ""), exportMap, TOR_EXPORT);
         return exportMap;
@@ -2662,6 +2723,7 @@ public final class Api {
         final StringBuilder data_uids = new StringBuilder();
         final StringBuilder roam_uids = new StringBuilder();
         final StringBuilder vpn_uids = new StringBuilder();
+        final StringBuilder tether_uids = new StringBuilder();
         final StringBuilder lan_uids = new StringBuilder();
         final StringBuilder tor_uids = new StringBuilder();
 
@@ -2736,6 +2798,20 @@ public final class Api {
                             }
                         }
                         break;
+                    case TETHER_EXPORT:
+                        if (tether_uids.length() != 0) {
+                            tether_uids.append('|');
+                        }
+                        if (pkgName.startsWith("dev.afwall.special")) {
+                            tether_uids.append(specialApps.get(pkgName));
+                        } else {
+                            try {
+                                tether_uids.append(pm.getApplicationInfo(pkgName, 0).uid);
+                            } catch (NameNotFoundException e) {
+
+                            }
+                        }
+                        break;
                     case LAN_EXPORT:
                         if (lan_uids.length() != 0) {
                             lan_uids.append('|');
@@ -2774,6 +2850,7 @@ public final class Api {
         edit.putString(PREF_3G_PKG_UIDS, data_uids.toString());
         edit.putString(PREF_ROAMING_PKG_UIDS, roam_uids.toString());
         edit.putString(PREF_VPN_PKG_UIDS, vpn_uids.toString());
+        edit.putString(PREF_TETHER_PKG_UIDS, tether_uids.toString());
         edit.putString(PREF_LAN_PKG_UIDS, lan_uids.toString());
         edit.putString(PREF_TOR_PKG_UIDS, tor_uids.toString());
 
@@ -2913,7 +2990,14 @@ public final class Api {
         return res;
     }
 
-    public static void setLogTarget(final Context ctx, boolean isEnabled) {
+    /**
+     * Probe log target
+     * @param ctx
+     */
+    public static void probeLogTarget(final Context ctx) {
+
+    }
+    /*public static void setLogTarget(final Context ctx, boolean isEnabled) {
         if (!isEnabled) {
             // easy case: just disable
             G.enableLogService(false);
@@ -2950,7 +3034,7 @@ public final class Api {
                     .setSuccessToast(R.string.log_was_enabled)
                     .setFailureToast(R.string.log_target_failed));
         }
-    }
+    }*/
 
     @SuppressLint("InlinedApi")
     public static void showInstalledAppDetails(Context context, String packageName) {
@@ -3052,6 +3136,7 @@ public final class Api {
         final String savedPkg_3g_uid = G.pPrefs.getString(PREF_3G_PKG_UIDS, "");
         final String savedPkg_roam_uid = G.pPrefs.getString(PREF_ROAMING_PKG_UIDS, "");
         final String savedPkg_vpn_uid = G.pPrefs.getString(PREF_VPN_PKG_UIDS, "");
+        final String savedPkg_tether_uid = G.pPrefs.getString(PREF_TETHER_PKG_UIDS, "");
         final String savedPkg_lan_uid = G.pPrefs.getString(PREF_LAN_PKG_UIDS, "");
         final String savedPkg_tor_uid = G.pPrefs.getString(PREF_TOR_PKG_UIDS, "");
 
@@ -3059,6 +3144,7 @@ public final class Api {
                 getListFromPref(savedPkg_3g_uid),
                 getListFromPref(savedPkg_roam_uid),
                 getListFromPref(savedPkg_vpn_uid),
+                getListFromPref(savedPkg_tether_uid),
                 getListFromPref(savedPkg_lan_uid),
                 getListFromPref(savedPkg_tor_uid));
         return dataSet;
@@ -3294,6 +3380,9 @@ public final class Api {
 
             if (activeNetwork.getType() == ConnectivityManager.TYPE_MOBILE)
                 return 2;
+
+            if (activeNetwork.getType() == ConnectivityManager.TYPE_BLUETOOTH)
+                return 3;
         }
         return 0;
     }
@@ -3450,13 +3539,17 @@ public final class Api {
             List<Integer> selected_3g = getListFromPref(prefs.getString(PREF_3G_PKG_UIDS, ""));
             List<Integer> selected_roam = new ArrayList<>();
             List<Integer> selected_vpn = new ArrayList<>();
+            List<Integer> selected_tether = new ArrayList<>();
             if (G.enableRoam()) {
                 selected_roam = getListFromPref(prefs.getString(PREF_ROAMING_PKG_UIDS, ""));
             }
             if (G.enableVPN()) {
                 selected_vpn = getListFromPref(prefs.getString(PREF_VPN_PKG_UIDS, ""));
             }
-            return (selected_wifi.contains(uid) && selected_3g.contains(uid)) || selected_roam.contains(uid) || selected_vpn.contains(uid);
+            if (G.enableTether()) {
+                selected_tether = getListFromPref(prefs.getString(PREF_TETHER_PKG_UIDS, ""));
+            }
+            return (selected_wifi.contains(uid) && selected_3g.contains(uid)) || selected_roam.contains(uid) || selected_vpn.contains(uid) || selected_tether.contains(uid);
         } catch (NameNotFoundException e) {
             return false;
         }
@@ -3495,15 +3588,17 @@ public final class Api {
         List<Integer> lanList;
         List<Integer> roamList;
         List<Integer> vpnList;
+        List<Integer> tetherList;
         List<Integer> torList;
 
         RuleDataSet(List<Integer> uidsWifi, List<Integer> uids3g,
-                    List<Integer> uidsRoam, List<Integer> uidsVPN, List<Integer> uidsLAN,
-                    List<Integer> uidsTor) {
+                    List<Integer> uidsRoam, List<Integer> uidsVPN, List<Integer> uidsTether,
+                    List<Integer> uidsLAN, List<Integer> uidsTor) {
             this.wifiList = uidsWifi;
             this.dataList = uids3g;
             this.roamList = uidsRoam;
             this.vpnList = uidsVPN;
+            this.tetherList = uidsTether;
             this.lanList = uidsLAN;
             this.torList = uidsTor;
         }
@@ -3516,6 +3611,7 @@ public final class Api {
             builder.append(lanList != null ? android.text.TextUtils.join(",", lanList) : "");
             builder.append(roamList != null ? android.text.TextUtils.join(",", roamList) : "");
             builder.append(vpnList != null ? android.text.TextUtils.join(",", vpnList) : "");
+            builder.append(tetherList != null ? android.text.TextUtils.join(",", tetherList) : "");
             builder.append(torList != null ? android.text.TextUtils.join(",", torList) : "");
             return builder.toString().trim();
         }
@@ -3601,6 +3697,10 @@ public final class Api {
          * indicates if this application is selected for vpn
          */
         public boolean selected_vpn;
+        /**
+         * indicates if this application is selected for tether
+         */
+        public boolean selected_tether;
         /**
          * indicates if this application is selected for lan
          */
@@ -3708,42 +3808,28 @@ public final class Api {
 
     }
 
-    private static class LogProbeCallback extends RootCommand.Callback {
-        private Context ctx;
+    /*public static class LogProbeCallback extends RootCommand.Callback {
+        public Context ctx;
+        private List<String> availableLogTargets = new ArrayList<>();
 
         public void cbFunc(RootCommand state) {
+
+            Toast.makeText(ctx, "coming here", Toast.LENGTH_SHORT).show();
+            String joined = TextUtils.join(", ", availableLogTargets);
+            G.logTargets(joined);
+
+
             if (state.exitCode != 0) {
-                G.enableLogService(false);
                 return;
             }
-            boolean logSet = false;
             for (String str : state.res.toString().split("\n")) {
                 if (str.equals("LOG")) {
-                    G.logTarget("LOG");
-                    logSet = true;
-                    Log.d(TAG, "logging using LOG target");
-                    break;
+                    availableLogTargets.add("LOG");
                 } else if (str.equals("NFLOG")) {
-                    G.logTarget("NFLOG");
-                    logSet = true;
-                    Log.d(TAG, "logging using NFLOG target");
-                    break;
+                    availableLogTargets.add("NFLOG");
                 }
             }
-
-            if (!logSet) {
-                Log.i(TAG, "could not find LOG or NFLOG target");
-                //displayToasts(ctx, R.string.log_target_failed, Toast.LENGTH_SHORT);
-                G.logTarget("");
-                G.enableLogService(false);
-                return;
-            }
-            G.enableLogService(true);
-            updateLogRules(ctx, new RootCommand()
-                    .setReopenShell(true)
-                    .setSuccessToast(R.string.log_was_enabled)
-                    .setFailureToast(R.string.log_target_failed));
         }
-    }
+    }*/
 
 }

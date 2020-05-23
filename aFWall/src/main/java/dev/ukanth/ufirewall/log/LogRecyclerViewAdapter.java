@@ -2,6 +2,8 @@ package dev.ukanth.ufirewall.log;
 
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.graphics.Color;
+import android.os.Build;
 import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -20,7 +22,10 @@ import java.util.Locale;
 
 import dev.ukanth.ufirewall.Api;
 import dev.ukanth.ufirewall.R;
+import dev.ukanth.ufirewall.util.AppIconHelperV26;
 import dev.ukanth.ufirewall.util.G;
+
+import static dev.ukanth.ufirewall.Api.TAG;
 
 /**
  * Created by ukanth on 25/7/16.
@@ -59,10 +64,23 @@ public class LogRecyclerViewAdapter  extends RecyclerView.Adapter<LogRecyclerVie
         holder.bind(logData.get(position),recyclerItemClickListener);
         try {
             info = Api.getPackageDetails(context, data.getUid());
-            holder.icon.setImageDrawable(info.applicationInfo.loadIcon(context.getPackageManager()));
+            if(Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
+                holder.icon.setBackground(info.applicationInfo.loadIcon(context.getPackageManager()));
+            } else {
+                holder.icon.setImageDrawable(info.applicationInfo.loadIcon(context.getPackageManager()));
+            }
         } catch (Exception e) {
+            Log.e(TAG,e.getMessage(),e);
             info = null;
-            holder.icon.setImageDrawable(context.getResources().getDrawable(R.drawable.ic_unknown));
+            try {
+                if(Build.VERSION.SDK_INT > android.os.Build.VERSION_CODES.O) {
+                    holder.icon.setBackground(context.getDrawable(R.drawable.ic_unknown));
+                } else {
+                    holder.icon.setImageDrawable(context.getDrawable(R.drawable.ic_unknown));
+                }
+            }catch (Exception e1) {
+                Log.e(TAG,e1.getMessage(),e1);
+            }
         }
 
         try {

@@ -35,7 +35,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/white" />
+                android:textColor="?attr/tint"/>
 
             <TextView
                 android:id="@+id/data_dest"
@@ -43,7 +43,7 @@
                 android:layout_height="wrap_content"
                 android:layout_below="@+id/denied_time"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/white" />
+                android:textColor="?attr/tint"/>
 
             <TextView
                 android:id="@+id/data_host"
@@ -51,7 +51,7 @@
                 android:layout_height="wrap_content"
                 android:layout_below="@+id/data_dest"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/white" />
+                android:textColor="?attr/tint"/>
 
             <TextView
                 android:id="@+id/data_src"
@@ -59,7 +59,7 @@
                 android:layout_height="wrap_content"
                 android:layout_below="@+id/data_host"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/white" />
+                android:textColor="?attr/tint"/>
 
             <TextView
                 android:id="@+id/data_proto"
@@ -67,7 +67,7 @@
                 android:layout_height="wrap_content"
                 android:layout_below="@+id/data_src"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/white"/>
+                android:textColor="?attr/tint"/>
 
         </RelativeLayout>
     </LinearLayout>

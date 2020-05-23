@@ -1,6 +1,46 @@
 AFWall+ Changelog
 ==================
 
+Version 3.4.0
+* Feature: Bluetooth,USB tethering as separate rules - Thanks @nxzero
+* Feature: Clone columns (Copy rules from one column to other column)
+* Feature: Selectable Log target (LOG/NFLOG)
+* Fix: Log related issues 
+* Fix: Notification related issues/Option removed!!
+* Main screen UI update - Thanks @vvimjam
+* Crash fixes and performance improvements
+* Translation updates.
+
+
+Version 3.4.0-BETA2
+* Main UI update only when more than 4 controls
+* Notification related fixes
+* UI related fixes.
+* Crash fixes
+
+Version 3.4.0-BETA1
+* Feature: Bluetooth,USB tethering as separate rules - Thanks @nxzero
+* Feature: Clone columns (Copy rules from one column to other column)
+* Feature: Selectable Log target (LOG/NFLOG)
+* Main screen UI update - Thanks @vvimjam
+* Crash fixes and performance improvements
+
+Version 3.3.1
+
+* Bug: Firewall not blocking on oneplus devices
+* Minor UI fixes
+
+Version 3.3.0
+
+* Bug Fixes:
+   - MAJOR: Rules not applied properly (v4/v6)
+   - Theme related bug with logs
+   - Log related bugs on many devices
+   - Boot rules are not applied on Pie and above
+   - Disable/Enable of firewall issue
+   - Crash on applying rules on fewer devices
+   - Notification bug on fewer devices
+
 Version 3.2.0
 * Integrate basic themes (Dark/Light or Black (donate version only!)
 * Preferences now showing selected values

@@ -4,8 +4,11 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.AppCompatCheckBox;
 import android.support.v7.widget.Toolbar;
 import android.view.MenuItem;
 import android.widget.Button;
@@ -45,7 +48,6 @@ public class AppDetailActivity extends AppCompatActivity {
         String packageName = getIntent().getStringExtra("package");
         try {
             CheckBox logOption = (CheckBox) findViewById(R.id.notification_p);
-
             LogPreference logPreference = SQLite.select()
                     .from(LogPreference.class)
                     .where(LogPreference_Table.uid.eq(appid)).querySingle();
@@ -98,7 +100,7 @@ public class AppDetailActivity extends AppCompatActivity {
                     setTotalBytesManual(down, up, applicationInfo.uid);
                 }
             } else {
-                image.setImageDrawable(getApplicationContext().getResources().getDrawable(R.drawable.ic_android_white_24dp));
+                image.setImageDrawable(getApplicationContext().getDrawable(R.drawable.ic_unknown));
                 if(appid >= 0) {
                     textView.setText(Api.getSpecialDescription(getApplicationContext(), packageName.replace("dev.afwall.special.", "")));
                 } else {

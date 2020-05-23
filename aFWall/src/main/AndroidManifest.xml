@@ -36,6 +36,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- Allows access to bluetooth tethering state -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+
     <!-- Allows ufwall to access information about Fingerprint -->
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
@@ -172,38 +175,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </receiver>
-        <service android:name=".service.ApplyOnBootService" />
-
-
-        <!--<receiver
-            android:name=".broadcast.OnBootReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </receiver>
-
-        <service android:name=".service.ApplyOnBootService" />-->
-
-        <!--
-                <receiver android:name=".broadcast.PackageBroadcast">
-                    <intent-filter>
-                        <action android:name="android.intent.action.PACKAGE_ADDED" />
-                        <action android:name="android.intent.action.PACKAGE_REMOVED" />
-
-                        <data android:scheme="package" />
-                    </intent-filter>
-                </receiver>
-
-
-                <receiver android:name=".broadcast.ConnectivityChangeReceiver">
-                    <intent-filter>
-                        <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
-                        <action android:name="android.net.wifi.WIFI_AP_STATE_CHANGED" />
-                    </intent-filter>
-                </receiver> -->
+        <!--<service android:name=".service.ApplyOnBootService" />-->
 
         <service
             android:name=".service.FirewallService"
@@ -320,6 +292,9 @@
             android:name=".service.RootShellService"
             android:exported="false" />
         <service
+            android:name=".service.RootShellService2"
+            android:exported="false" />
+        <service
             android:name=".service.LogService"
             android:enabled="true"
             android:label="AFWallLogService" />
@@ -351,10 +326,10 @@
             android:name=".service.RulesApplyService"
             android:exported="false" />
 
-        <!--for donate change it -->
+        <!--TODO: for donate change it -->
         <provider
             android:name=".util.XPreferenceProvider"
-            android:authorities="dev.ukanth.ufirewall"
+            android:authorities="${applicationId}"
             android:exported="true" />
 
         <activity android:name=".activity.CustomRulesActivity"></activity>

@@ -44,16 +44,20 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.PowerManager;
+import android.preference.ListPreference;
 import android.provider.Settings;
 import android.support.annotation.NonNull;
+import android.support.annotation.RequiresApi;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.content.LocalBroadcastManager;
+import android.support.v4.view.ViewCompat;
 import android.support.v4.widget.SwipeRefreshLayout;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.text.Editable;
+import android.text.TextUtils;
 import android.text.TextUtils.TruncateAt;
 import android.text.TextWatcher;
 import android.view.KeyEvent;
@@ -62,6 +66,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.View.OnClickListener;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -69,11 +74,14 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.RadioGroup;
 import android.widget.Spinner;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.afollestad.materialdialogs.DialogAction;
@@ -150,17 +158,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private MaterialDialog runProgress;
     private AlertDialog dialogLegend = null;
 
-    private BroadcastReceiver uiProgressReceiver;
-    private BroadcastReceiver toastReceiver;
-
-
-    private BroadcastReceiver themeRefreshReceiver;
-    private IntentFilter uiFilter;
+    private BroadcastReceiver uiProgressReceiver4,uiProgressReceiver6, toastReceiver,themeRefreshReceiver, uiRefreshReceiver;
+    private IntentFilter uiFilter4, uiFilter6;
 
     //all async reference with context
     private GetAppList getAppList;
     private RunApply runApply;
     private PurgeTask purgeTask;
+    private int currentUI = 0;
+    private static int DEFAULT_COLUMN = 2;
+    private int selectedColumns = DEFAULT_COLUMN;
+    private static int DEFAULT_VIEW_LIMIT = 4;
+    private View view;
 
     public boolean isDirty() {
         return dirty;
@@ -194,7 +203,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         } catch (Exception e) {
         }
 
-        setContentView(R.layout.main);
+        updateSelectedColumns();
+
+        if(selectedColumns <= DEFAULT_VIEW_LIMIT) {
+            currentUI = 0;
+            setContentView(R.layout.main_old);
+        }
+        else{
+            currentUI = 1;
+            setContentView(R.layout.main);
+        }
 
         Toolbar toolbar = (Toolbar) findViewById(R.id.main_toolbar);
 
@@ -206,8 +224,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
 
         this.findViewById(R.id.img_wifi).setOnClickListener(this);
+        /*
         this.findViewById(R.id.img_reset).setOnClickListener(this);
         this.findViewById(R.id.img_invert).setOnClickListener(this);
+        this.findViewById(R.id.img_clone).setOnClickListener(this);
+        */
+        this.findViewById(R.id.img_action).setOnClickListener(this);
 
         AlpSettings.Display.setStealthMode(getApplicationContext(), G.enableStealthPattern());
         AlpSettings.Display.setMaxRetries(getApplicationContext(), G.getMaxPatternTry());
@@ -230,24 +252,55 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             registerNetworkObserver();
         }
         //registerQuickApply();
-        registerUIbroadcast();
+        registerUIbroadcast4();
+        registerUIbroadcast6();
+
         registerToastbroadcast();
         migrateNotification();
         initTextWatcher();
-        registerLogService();
+        //registerLogService();
         //checkAndAskForBatteryOptimization();
         registerThemeIntent();
+        registerUIRefresh();
+
+
     }
 
-    private void registerLogService() {
+    private void updateSelectedColumns() {
+        selectedColumns = DEFAULT_COLUMN;
+        selectedColumns = G.enableLAN() ?  selectedColumns + 1 : selectedColumns;
+        selectedColumns = G.enableRoam() ?  selectedColumns + 1 : selectedColumns;
+        selectedColumns = G.enableVPN() ?  selectedColumns + 1 : selectedColumns;
+        selectedColumns = G.enableTether() ?  selectedColumns + 1 : selectedColumns;
+        selectedColumns = G.enableTor() ?  selectedColumns + 1 : selectedColumns;
+    }
+
+    /*private void registerLogService() {
         if (G.enableLogService()) {
             Log.i(G.TAG, "Starting Log Service");
             final Intent logIntent = new Intent(getBaseContext(), LogService.class);
             startService(logIntent);
             G.storedPid(new HashSet());
         }
-    }
+    }*/
 
+    private void  registerUIRefresh(){
+        IntentFilter filter = new IntentFilter("dev.ukanth.ufirewall.ui.CHECKREFRESH");
+        uiRefreshReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                updateSelectedColumns();
+
+                if(selectedColumns <= DEFAULT_VIEW_LIMIT && currentUI == 1) {
+                    recreate();
+                }
+                else if(selectedColumns > DEFAULT_VIEW_LIMIT && currentUI == 0){
+                    recreate();
+                }
+            }
+        };
+        registerReceiver(uiRefreshReceiver, filter);
+    }
     private void registerThemeIntent() {
 
         IntentFilter filter = new IntentFilter("dev.ukanth.ufirewall.theme.REFRESH");
@@ -259,6 +312,35 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
         };
         registerReceiver(themeRefreshReceiver, filter);
+    }
+
+    private void probeLogTarget() {
+        List<String> availableLogTargets = new ArrayList<>();
+        if (G.logTargets() == null) {
+            try {
+                new RootCommand()
+                        .setReopenShell(true)
+                        .setCallback(new RootCommand.Callback() {
+                            public void cbFunc(RootCommand state) {
+                                if (state.exitCode != 0) {
+                                    return;
+                                }
+                                for (String str : state.res.toString().split("\n")) {
+                                    if (str.equals("LOG") || str.equals("NFLOG")) {
+                                        availableLogTargets.add(str);
+                                    }
+                                }
+                                if (availableLogTargets.size() > 0) {
+                                    String joined = TextUtils.join(",", availableLogTargets);
+                                    G.logTargets(joined);
+                                }
+                            }
+                        }).setLogging(true)
+                        .run(ctx, "cat /proc/net/ip_tables_targets");
+            } catch (Exception e) {
+                Log.e(Api.TAG, "Exception in getting iptables log targets", e);
+            }
+        }
     }
 
     private void initTheme() {
@@ -345,15 +427,33 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         registerReceiver(toastReceiver, filter);
     }
 
-    private void registerUIbroadcast() {
-        uiFilter = new IntentFilter("UPDATEUI");
+    private void registerUIbroadcast4() {
+        uiFilter4 = new IntentFilter("UPDATEUI4");
 
-        uiProgressReceiver = new BroadcastReceiver() {
+        uiProgressReceiver4 = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                String rules = G.enableIPv6() ? " (v4 & v6) " : " (v4) ";
-                if (runProgress != null) {
-                    runProgress.setContent(context.getString(R.string.applying) + rules + intent.getExtras().get("INDEX") + "/" + intent.getExtras().get("SIZE"));
+                Bundle b = intent.getExtras();
+                if(runProgress !=null) {
+                    TextView view = (TextView) runProgress.findViewById(R.id.apply4);
+                    view.setText(b.get("INDEX") + "/" + b.get("SIZE"));
+                    view.invalidate();
+                }
+            }
+        };
+    }
+
+    private void registerUIbroadcast6() {
+        uiFilter6 = new IntentFilter("UPDATEUI6");
+
+        uiProgressReceiver6 = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                Bundle b = intent.getExtras();
+                if(runProgress !=null) {
+                    TextView view = (TextView) runProgress.findViewById(R.id.apply6);
+                    view.setText(b.get("INDEX") + "/" + b.get("SIZE"));
+                    view.invalidate();
                 }
             }
         };
@@ -441,8 +541,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         } catch (Exception e) {
             Log.d(Api.TAG, "Exception in filter Sorting");
         }
-
-        ArrayAdapter appAdapter = new AppListArrayAdapter(this, getApplicationContext(), inputList);
+        ArrayAdapter appAdapter;
+        if(selectedColumns <= DEFAULT_VIEW_LIMIT) {
+            appAdapter = new AppListArrayAdapter(this, getApplicationContext(), inputList, true);
+        } else {
+            appAdapter = new AppListArrayAdapter(this, getApplicationContext(), inputList);
+        }
         this.listview.setAdapter(appAdapter);
         appAdapter.notifyDataSetChanged();
         // restore
@@ -458,6 +562,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     protected void onRestart() {
         super.onRestart();
     }
+
+
 
     private void updateIconStatus() {
         if (Api.isEnabled(getApplicationContext())) {
@@ -514,7 +620,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         } else {
             fab.setVisibility(View.GONE);
         }*/
-        LocalBroadcastManager.getInstance(getApplicationContext()).registerReceiver(uiProgressReceiver, uiFilter);
+        LocalBroadcastManager.getInstance(getApplicationContext()).registerReceiver(uiProgressReceiver4, uiFilter4);
+        LocalBroadcastManager.getInstance(getApplicationContext()).registerReceiver(uiProgressReceiver6, uiFilter6);
+
         G.activityResumed();
 
         //getSupportActionBar().setBackgroundDrawable(new ColorDrawable(G.primaryColor()));
@@ -526,6 +634,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     private void reloadPreferences() {
+
+        updateSelectedColumns();
+
         getSupportActionBar().setDisplayShowHomeEnabled(true);
         G.reloadPrefs();
         checkPreferences();
@@ -568,6 +679,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             addColumns(R.id.img_vpn);
         } else {
             hideColumns(R.id.img_vpn);
+        }
+        if (G.enableTether()) {
+            addColumns(R.id.img_tether);
+        } else {
+            hideColumns(R.id.img_tether);
         }
 
         if (!Api.isMobileNetworkSupported(getApplicationContext())) {
@@ -760,7 +876,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         View v = this.listview.getChildAt(0);
         top = (v == null) ? 0 : v.getTop();
         G.activityPaused();
-        LocalBroadcastManager.getInstance(getApplicationContext()).unregisterReceiver(uiProgressReceiver);
+        LocalBroadcastManager.getInstance(getApplicationContext()).unregisterReceiver(uiProgressReceiver4);
+        LocalBroadcastManager.getInstance(getApplicationContext()).unregisterReceiver(uiProgressReceiver6);
     }
 
     /**
@@ -904,7 +1021,13 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         try {
             if (apps2 != null) {
                 Collections.sort(apps2, new PackageComparator());
-                this.listview.setAdapter(new AppListArrayAdapter(this, getApplicationContext(), apps2));
+                ArrayAdapter appAdapter;
+                if(selectedColumns <= DEFAULT_VIEW_LIMIT) {
+                    appAdapter = new AppListArrayAdapter(this, getApplicationContext(), apps2, true);
+                } else {
+                    appAdapter = new AppListArrayAdapter(this, getApplicationContext(), apps2);
+                }
+                this.listview.setAdapter(appAdapter);
                 // restore
                 this.listview.setSelectionFromTop(index, top);
             }
@@ -1002,7 +1125,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 purgeRules();
             }
         }
-        refreshHeader();
+        //refreshHeader();
     }
 
     @Override
@@ -1162,25 +1285,53 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         getString(R.string.import_rules),
                         getString(R.string.import_all),
                         getString(R.string.import_rules_droidwall)})
-                .itemsCallbackSingleChoice(-1, new MaterialDialog.ListCallbackSingleChoice() {
-                    @Override
-                    public boolean onSelection(MaterialDialog dialog, View view, int which, CharSequence text) {
-                        switch (which) {
-                            case 0:
-                                //Intent intent = new Intent(MainActivity.this, FileChooserActivity.class);
-                                //startActivityForResult(intent, FILE_CHOOSER_LOCAL);
-                                File mPath = new File(Environment.getExternalStorageDirectory() + "//afwall//");
-                                FileDialog fileDialog = new FileDialog(MainActivity.this, mPath, true);
-                                //fileDialog.setFlag(true);
-                                //fileDialog.setFileEndsWith(new String[] {"backup", "afwall-backup"}, "all");
-                                fileDialog.addFileListener(new FileDialog.FileSelectedListener() {
+                .itemsCallbackSingleChoice(-1, (dialog, view, which, text) -> {
+                    switch (which) {
+                        case 0:
+                            //Intent intent = new Intent(MainActivity.this, FileChooserActivity.class);
+                            //startActivityForResult(intent, FILE_CHOOSER_LOCAL);
+                            File mPath = new File(Environment.getExternalStorageDirectory() + "//afwall//");
+                            FileDialog fileDialog = new FileDialog(MainActivity.this, mPath, true);
+                            //fileDialog.setFlag(true);
+                            //fileDialog.setFileEndsWith(new String[] {"backup", "afwall-backup"}, "all");
+                            fileDialog.addFileListener(new FileDialog.FileSelectedListener() {
+                                public void fileSelected(File file) {
+                                    String fileSelected = file.toString();
+                                    StringBuilder builder = new StringBuilder();
+                                    if (Api.loadSharedPreferencesFromFile(MainActivity.this, builder, fileSelected, false)) {
+                                        Api.applications = null;
+                                        showOrLoadApplications();
+                                        Api.toast(MainActivity.this, getString(R.string.import_rules_success) + fileSelected);
+                                    } else {
+                                        if (builder.toString().equals("")) {
+                                            Api.toast(MainActivity.this, getString(R.string.import_rules_fail));
+                                        } else {
+                                            Api.toast(MainActivity.this, builder.toString());
+                                        }
+                                    }
+                                }
+                            });
+                            fileDialog.showDialog();
+                            break;
+                        case 1:
+
+                            if (G.isDoKey(getApplicationContext()) || isDonate()) {
+
+                                File mPath2 = new File(Environment.getExternalStorageDirectory() + "//afwall//");
+                                FileDialog fileDialog2 = new FileDialog(MainActivity.this, mPath2, false);
+                                //fileDialog2.setFlag(false);
+                                //fileDialog2.setFileEndsWith(new String[] {"backup_all", "afwall-backup-all"}, "" );
+                                fileDialog2.addFileListener(new FileDialog.FileSelectedListener() {
                                     public void fileSelected(File file) {
                                         String fileSelected = file.toString();
                                         StringBuilder builder = new StringBuilder();
-                                        if (Api.loadSharedPreferencesFromFile(MainActivity.this, builder, fileSelected, false)) {
+                                        if (Api.loadSharedPreferencesFromFile(MainActivity.this, builder, fileSelected, true)) {
                                             Api.applications = null;
                                             showOrLoadApplications();
                                             Api.toast(MainActivity.this, getString(R.string.import_rules_success) + fileSelected);
+                                            Intent intent = getIntent();
+                                            finish();
+                                            startActivity(intent);
                                         } else {
                                             if (builder.toString().equals("")) {
                                                 Api.toast(MainActivity.this, getString(R.string.import_rules_fail));
@@ -1190,75 +1341,44 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                         }
                                     }
                                 });
-                                fileDialog.showDialog();
-                                break;
-                            case 1:
+                                fileDialog2.showDialog();
+                            } else {
+                                Api.donateDialog(MainActivity.this, false);
+                            }
+                            break;
+                        case 2:
 
-                                if (G.isDoKey(getApplicationContext()) || isDonate()) {
-
-                                    File mPath2 = new File(Environment.getExternalStorageDirectory() + "//afwall//");
-                                    FileDialog fileDialog2 = new FileDialog(MainActivity.this, mPath2, false);
-                                    //fileDialog2.setFlag(false);
-                                    //fileDialog2.setFileEndsWith(new String[] {"backup_all", "afwall-backup-all"}, "" );
-                                    fileDialog2.addFileListener(new FileDialog.FileSelectedListener() {
-                                        public void fileSelected(File file) {
-                                            String fileSelected = file.toString();
-                                            StringBuilder builder = new StringBuilder();
-                                            if (Api.loadSharedPreferencesFromFile(MainActivity.this, builder, fileSelected, true)) {
+                            new MaterialDialog.Builder(MainActivity.this).cancelable(false)
+                                    .title(R.string.import_rules_droidwall)
+                                    .content(R.string.overrideRules)
+                                    .positiveText(R.string.Yes)
+                                    .negativeText(R.string.No)
+                                    .icon(getResources().getDrawable(R.drawable.ic_launcher))
+                                    .onPositive(new MaterialDialog.SingleButtonCallback() {
+                                        @Override
+                                        public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
+                                            if (ImportApi.loadSharedPreferencesFromDroidWall(MainActivity.this)) {
                                                 Api.applications = null;
                                                 showOrLoadApplications();
-                                                Api.toast(MainActivity.this, getString(R.string.import_rules_success) + fileSelected);
-                                                Intent intent = getIntent();
-                                                finish();
-                                                startActivity(intent);
+                                                Api.toast(MainActivity.this, getString(R.string.import_rules_success) + Environment.getExternalStorageDirectory().getAbsolutePath() + "/afwall/");
                                             } else {
-                                                if (builder.toString().equals("")) {
-                                                    Api.toast(MainActivity.this, getString(R.string.import_rules_fail));
-                                                } else {
-                                                    Api.toast(MainActivity.this, builder.toString());
-                                                }
+                                                Api.toast(MainActivity.this, getString(R.string.import_rules_fail));
                                             }
                                         }
-                                    });
-                                    fileDialog2.showDialog();
-                                } else {
-                                    Api.donateDialog(MainActivity.this, false);
-                                }
-                                break;
-                            case 2:
+                                    })
 
-                                new MaterialDialog.Builder(MainActivity.this).cancelable(false)
-                                        .title(R.string.import_rules_droidwall)
-                                        .content(R.string.overrideRules)
-                                        .positiveText(R.string.Yes)
-                                        .negativeText(R.string.No)
-                                        .icon(getResources().getDrawable(R.drawable.ic_launcher))
-                                        .onPositive(new MaterialDialog.SingleButtonCallback() {
-                                            @Override
-                                            public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                                                if (ImportApi.loadSharedPreferencesFromDroidWall(MainActivity.this)) {
-                                                    Api.applications = null;
-                                                    showOrLoadApplications();
-                                                    Api.toast(MainActivity.this, getString(R.string.import_rules_success) + Environment.getExternalStorageDirectory().getAbsolutePath() + "/afwall/");
-                                                } else {
-                                                    Api.toast(MainActivity.this, getString(R.string.import_rules_fail));
-                                                }
-                                            }
-                                        })
-
-                                        .onNegative(new MaterialDialog.SingleButtonCallback() {
-                                            @Override
-                                            public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                                                dialog.cancel();
-                                            }
-                                        })
-                                        .show();
+                                    .onNegative(new MaterialDialog.SingleButtonCallback() {
+                                        @Override
+                                        public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
+                                            dialog.cancel();
+                                        }
+                                    })
+                                    .show();
 
 
-                                break;
-                        }
-                        return true;
+                            break;
                     }
+                    return true;
                 })
                 .positiveText(R.string.imports)
                 .negativeText(R.string.Cancel)
@@ -1272,19 +1392,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 .items(new String[]{
                         getString(R.string.export_rules),
                         getString(R.string.export_all)})
-                .itemsCallbackSingleChoice(-1, new MaterialDialog.ListCallbackSingleChoice() {
-                    @Override
-                    public boolean onSelection(MaterialDialog dialog, View view, int which, CharSequence text) {
-                        switch (which) {
-                            case 0:
-                                Api.exportRulesToFileConfirm(MainActivity.this);
-                                break;
-                            case 1:
-                                Api.exportAllPreferencesToFileConfirm(MainActivity.this);
-                                break;
-                        }
-                        return true;
+                .itemsCallbackSingleChoice(-1, (dialog, view, which, text) -> {
+                    switch (which) {
+                        case 0:
+                            Api.exportRulesToFileConfirm(MainActivity.this);
+                            break;
+                        case 1:
+                            Api.exportAllPreferencesToFileConfirm(MainActivity.this);
+                            break;
                     }
+                    return true;
                 }).positiveText(R.string.exports)
                 .negativeText(R.string.Cancel)
                 .show();
@@ -1347,20 +1464,13 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     @Override
                     public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
                         purgeRules();
-                       /* if (G.activeNotification()) {
-                            Api.showNotification(Api.isEnabled(getApplicationContext()), getApplicationContext());
-                        }*/
                         Api.updateNotification(Api.isEnabled(getApplicationContext()), getApplicationContext());
-                        //ServiceCompat.stopForeground(FirewallService.class,Service.STOP_FOREGROUND_REMOVE);
                         dialog.dismiss();
                     }
                 })
-                .onNegative(new MaterialDialog.SingleButtonCallback() {
-                    @Override
-                    public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                        Api.setEnabled(getApplicationContext(), true, true);
-                        dialog.dismiss();
-                    }
+                .onNegative((dialog, which) -> {
+                    Api.setEnabled(getApplicationContext(), true, true);
+                    dialog.dismiss();
                 })
                 .positiveText(R.string.Yes)
                 .negativeText(R.string.No)
@@ -1442,6 +1552,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             break;
             case PREFERENCE_RESULT: {
                 invalidateOptionsMenu();
+                //recreate();
             }
             break;
         }
@@ -1531,8 +1642,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private void purgeRules() {
         purgeTask = new PurgeTask(MainActivity.this);
         purgeTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-
-        menuSetApplyOrSave(mainMenu, Api.isEnabled(getApplicationContext()));
     }
 
     @Override
@@ -1554,22 +1663,57 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             case R.id.img_vpn:
                 selectActionConfirmation(v.getId());
                 break;
+            case R.id.img_tether:
+                selectActionConfirmation(v.getId());
+                break;
             case R.id.img_lan:
                 selectActionConfirmation(v.getId());
                 break;
             case R.id.img_tor:
                 selectActionConfirmation(v.getId());
                 break;
-            case R.id.img_invert:
+            /*case R.id.img_invert:
                 selectActionConfirmation(getString(R.string.reverse_all), v.getId());
+                break;
+            case R.id.img_clone:
+                cloneColumn(getString(R.string.legend_clone), v.getId());
                 break;
             case R.id.img_reset:
                 selectActionConfirmation(getString(R.string.unselect_all), v.getId());
-                break;
-            //case R.id.img_invert:
-            //	revertApplications();
-            //	break;
+                break;*/
+            case R.id.img_action:
+                selectAction();
+                //case R.id.img_invert:
+                //	revertApplications();
+                //	break;
         }
+    }
+
+    private void selectAction() {
+        new MaterialDialog.Builder(this)
+                .title(R.string.confirmation)
+                .cancelable(true)
+                .negativeText(R.string.Cancel)
+                .items(new String[]{
+                        getString(R.string.invert_all),
+                        getString(R.string.clone),
+                        getString(R.string.clear_all)})
+                .itemsCallback((dialog, view, which, text) -> {
+                    switch (which) {
+                        case 0:
+                            selectActionConfirmation(getString(R.string.reverse_all), 0);
+                            break;
+                        case 1:
+                            cloneColumn(getString(R.string.legend_clone));
+                            break;
+                        case 2:
+                            selectActionConfirmation(getString(R.string.unselect_all), 1);
+                            break;
+                    }
+                })
+                .onNegative((dialog, which) -> dialog.dismiss())
+                .show();
+
     }
 
     private void selectAllLAN(boolean flag) {
@@ -1642,6 +1786,25 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
     }
 
+    private void selectAlltether(boolean flag) {
+        if (this.listview == null) {
+            this.listview = (ListView) this.findViewById(R.id.listview);
+        }
+        ListAdapter adapter = listview.getAdapter();
+        if (adapter != null) {
+            int count = adapter.getCount(), item;
+            for (item = 0; item < count; item++) {
+                PackageInfoData data = (PackageInfoData) adapter.getItem(item);
+                if (data.uid != Api.SPECIAL_UID_ANY) {
+                    data.selected_tether = flag;
+                    //addToQueue(data);
+                }
+                setDirty(true);
+            }
+            ((BaseAdapter) adapter).notifyDataSetChanged();
+        }
+    }
+
     private void selectRevert(int flag) {
         if (this.listview == null) {
             this.listview = (ListView) this.findViewById(R.id.listview);
@@ -1664,6 +1827,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                             break;
                         case R.id.img_vpn:
                             data.selected_vpn = !data.selected_vpn;
+                            break;
+                        case R.id.img_tether:
+                            data.selected_tether = !data.selected_tether;
                             break;
                         case R.id.img_lan:
                             data.selected_lan = !data.selected_lan;
@@ -1694,6 +1860,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     data.selected_3g = !data.selected_3g;
                     data.selected_roam = !data.selected_roam;
                     data.selected_vpn = !data.selected_vpn;
+                    data.selected_tether = !data.selected_tether;
                     data.selected_lan = !data.selected_lan;
                     data.selected_tor = !data.selected_tor;
                     //addToQueue(data);
@@ -1736,6 +1903,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 data.selected_3g = false;
                 data.selected_roam = false;
                 data.selected_vpn = false;
+                data.selected_tether = false;
                 data.selected_lan = false;
                 data.selected_tor = false;
                 //addToQueue(data);
@@ -1804,24 +1972,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                 .content(R.string.unsaved_changes_message)
                                 .positiveText(R.string.apply)
                                 .negativeText(R.string.discard)
-                                .onPositive(new MaterialDialog.SingleButtonCallback() {
-                                    @Override
-                                    public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                                        applyOrSaveRules();
-                                        dialog.dismiss();
-                                    }
+                                .onPositive((dialog, which) -> {
+                                    applyOrSaveRules();
+                                    dialog.dismiss();
                                 })
-                                .onNegative(new MaterialDialog.SingleButtonCallback() {
-                                    @Override
-                                    public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                                        setDirty(false);
-                                        Api.applications = null;
-                                        //finish();
-                                        //System.exit(0);
-                                        //force reload rules.
-                                        MainActivity.super.onKeyDown(keyCode, event);
-                                        dialog.dismiss();
-                                    }
+                                .onNegative((dialog, which) -> {
+                                    setDirty(false);
+                                    Api.applications = null;
+                                    finish();
+                                    //System.exit(0);
+                                    //force reload rules.
+                                    MainActivity.super.onKeyDown(keyCode, event);
+                                    dialog.dismiss();
                                 })
                                 .show();
                         return true;
@@ -1849,27 +2011,251 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 .cancelable(true)
                 .positiveText(R.string.OK)
                 .negativeText(R.string.Cancel)
-                .onPositive(new MaterialDialog.SingleButtonCallback() {
-                    @Override
-                    public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                        switch (i) {
-                            case R.id.img_invert:
-                                selectRevert();
-                                break;
-                            case R.id.img_reset:
-                                clearAll();
-                        }
-                        dialog.dismiss();
+                .onPositive((dialog, which) -> {
+                    switch (i) {
+                        case 0:
+                            selectRevert();
+                            break;
+                        case 1:
+                            clearAll();
                     }
+                    dialog.dismiss();
                 })
 
-                .onNegative(new MaterialDialog.SingleButtonCallback() {
-                    @Override
-                    public void onClick(@NonNull MaterialDialog dialog, @NonNull DialogAction which) {
-                        dialog.dismiss();
-                    }
-                })
+                .onNegative((dialog, which) -> dialog.dismiss())
                 .show();
+    }
+
+    private void cloneColumn(String displayMessage) {
+        String[] items = new String[]{
+                getString(R.string.lan),
+                getString(R.string.wifi),
+                getString(R.string.data),
+                getString(R.string.vpn),
+                getString(R.string.roam),
+                getString(R.string.tether),
+                getString(R.string.tor)};
+
+        new MaterialDialog.Builder(this)
+                .title(R.string.confirmation).content(displayMessage)
+                .cancelable(true)
+                .positiveText(R.string.OK)
+                .negativeText(R.string.Cancel)
+                .items(items)
+                .itemsCallbackSingleChoice(-1, (dialog, view, which, text) -> {
+                    switch (which) {
+                        default:
+                            new MaterialDialog.Builder(this)
+                                    .title(R.string.confirmation).content(displayMessage)
+                                    .cancelable(true)
+                                    .positiveText(R.string.OK)
+                                    .negativeText(R.string.Cancel)
+                                    .items(items)
+                                    .itemsCallbackSingleChoice(-1, (dialog2, view2, which2, text2) -> {
+                                        switch (which) {
+                                            default:
+                                                copyColumns(which, which2);
+
+                                        }
+                                        return true;
+                                    })
+                                    .positiveText(R.string.clone)
+
+                                    .onNegative((dialog2, which2) -> dialog.dismiss())
+                                    .show();
+                    }
+                    return true;
+                })
+                .positiveText(R.string.from)
+                .onNegative((dialog, which) -> dialog.dismiss())
+                .show();
+    }
+
+    private void copyColumns(int which, int which2) {
+        if (this.listview == null) {
+            this.listview = (ListView) this.findViewById(R.id.listview);
+        }
+        ListAdapter adapter = listview.getAdapter();
+        if (adapter != null) {
+            int count = adapter.getCount(), item;
+            for (item = 0; item < count; item++) {
+                PackageInfoData data = (PackageInfoData) adapter.getItem(item);
+                if (data.uid != Api.SPECIAL_UID_ANY) {
+                    switch (which) {
+                        case 0:
+                            switch (which2) {
+                                case 0:
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_lan;
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_lan;
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_lan;
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_lan;
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_lan;
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_lan;
+                                    break;
+                            }
+                            break;
+                        case 1:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_wifi;
+                                    break;
+                                case 1:
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_wifi;
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_wifi;
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_wifi;
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_wifi;
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_wifi;
+                                    break;
+                            }
+                            break;
+                        case 2:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_3g;
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_3g;
+                                    break;
+                                case 2:
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_3g;
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_3g;
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_3g;
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_3g;
+                                    break;
+                            }
+                            break;
+                        case 3:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_vpn;
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_vpn;
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_vpn;
+                                    break;
+                                case 3:
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_vpn;
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_vpn;
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_vpn;
+                                    break;
+                            }
+                            break;
+                        case 4:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_roam;
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_roam;
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_roam;
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_roam;
+                                    break;
+                                case 4:
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_roam;
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_roam;
+                                    break;
+                            }
+                            break;
+                        case 5:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_tether;
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_tether;
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_tether;
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_tether;
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_tether;
+                                    break;
+                                case 5:
+                                    break;
+                                case 6:
+                                    data.selected_tor = data.selected_tether;
+                                    break;
+                            }
+                            break;
+                        case 6:
+                            switch (which2) {
+                                case 0:
+                                    data.selected_lan = data.selected_tor;
+                                    break;
+                                case 1:
+                                    data.selected_wifi = data.selected_tor;
+                                    break;
+                                case 2:
+                                    data.selected_3g = data.selected_tor;
+                                    break;
+                                case 3:
+                                    data.selected_vpn = data.selected_tor;
+                                    break;
+                                case 4:
+                                    data.selected_roam = data.selected_tor;
+                                    break;
+                                case 5:
+                                    data.selected_tether = data.selected_tor;
+                                    break;
+                                case 6:
+                                    break;
+                            }
+                            break;
+                    }
+                }
+                setDirty(true);
+            }
+            ((BaseAdapter) adapter).notifyDataSetChanged();
+        }
     }
 
     private void selectActionConfirmation(final int i) {
@@ -1903,6 +2289,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                         dialog.setTitle(text + getString(R.string.vpn));
                                         selectAllVPN(true);
                                         break;
+                                    case R.id.img_tether:
+                                        dialog.setTitle(text + getString(R.string.tether));
+                                        selectAlltether(true);
+                                        break;
                                     case R.id.img_lan:
                                         dialog.setTitle(text + getString(R.string.lan));
                                         selectAllLAN(true);
@@ -1926,6 +2316,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                         break;
                                     case R.id.img_vpn:
                                         dialog.setTitle(text + getString(R.string.vpn));
+                                        break;
+                                    case R.id.img_tether:
+                                        dialog.setTitle(text + getString(R.string.tether));
                                         break;
                                     case R.id.img_lan:
                                         dialog.setTitle(text + getString(R.string.lan));
@@ -1954,6 +2347,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                     case R.id.img_vpn:
                                         dialog.setTitle(text + getString(R.string.vpn));
                                         selectAllVPN(false);
+                                        break;
+                                    case R.id.img_tether:
+                                        dialog.setTitle(text + getString(R.string.tether));
+                                        selectAlltether(false);
                                         break;
                                     case R.id.img_lan:
                                         dialog.setTitle(text + getString(R.string.lan));
@@ -2006,6 +2403,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         if (themeRefreshReceiver != null) {
             unregisterReceiver(themeRefreshReceiver);
         }
+        if (uiRefreshReceiver != null) {
+            unregisterReceiver(uiRefreshReceiver);
+        }
     }
 
     @Override
@@ -2053,6 +2453,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                 boolean nowEnabled = state.exitCode != 0;
                                 runOnUiThread(() -> {
                                     Api.setEnabled(ctx, nowEnabled, true);
+                                    menuSetApplyOrSave(mainMenu, nowEnabled);
+                                    refreshHeader();
                                 });
 
                             }
@@ -2160,10 +2562,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             runProgress = new MaterialDialog.Builder(activityReference.get())
                     .title(R.string.su_check_title)
                     .cancelable(true)
-                    .content(enabled ? R.string.applying_rules
-                            : R.string.saving_rules)
+                    .customView(R.layout.apply_view, false)
+                    //.content(enabled ? R.string.applying_rules
+                    //        : R.string.saving_rules)
                     .negativeText("Dismiss")
                     .show();
+            if(G.enableIPv6()) {
+                runProgress.findViewById(R.id.apply6layout).setVisibility(View.VISIBLE);
+            }
         }
 
         @Override
@@ -2171,10 +2577,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             //set the progress
             if (G.hasRoot()) {
                 Api.setRulesUpToDate(false);
-                Api.applySavedIptablesRules(activityReference.get(), true, new RootCommand()
+                RootCommand rootCommand4 = new RootCommand()
                         .setSuccessToast(R.string.rules_applied)
                         .setFailureToast(R.string.error_apply)
-                        .setReopenShell(true)
                         .setCallback(new RootCommand.Callback() {
                             public void cbFunc(RootCommand state) {
                                 try {
@@ -2197,9 +2602,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                         menuSetApplyOrSave(activityReference.get().mainMenu, enabled);
                                         Api.setEnabled(activityReference.get(), enabled, true);
                                     }
+                                    refreshHeader();
                                 });
                             }
-                        }));
+                        });
+                Api.applySavedIptablesRules(activityReference.get(), true, rootCommand4);
+                probeLogTarget();
                 return true;
             } else {
                 runOnUiThread(() -> {
@@ -2220,6 +2628,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             if (!aVoid) {
                 Toast.makeText(activityReference.get(), getString(R.string.error_su_toast), Toast.LENGTH_SHORT).show();
                 disableFirewall();
+                refreshHeader();
                 try {
                     runProgress.dismiss();
                 } catch (Exception ex) {
@@ -2302,6 +2711,19 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 startRootShell();
                 new SecurityUtil(MainActivity.this).passCheck();
             }
+        }
+    }
+
+    @RequiresApi(28)
+    private static class OnUnhandledKeyEventListenerWrapper implements View.OnUnhandledKeyEventListener {
+        private ViewCompat.OnUnhandledKeyEventListenerCompat mCompatListener;
+
+        OnUnhandledKeyEventListenerWrapper(ViewCompat.OnUnhandledKeyEventListenerCompat listener) {
+            this.mCompatListener = listener;
+        }
+
+        public boolean onUnhandledKeyEvent(View v, KeyEvent event) {
+            return this.mCompatListener.onUnhandledKeyEvent(v, event);
         }
     }
 }

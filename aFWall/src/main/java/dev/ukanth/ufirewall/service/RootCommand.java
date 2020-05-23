@@ -2,6 +2,7 @@ package dev.ukanth.ufirewall.service;
 
 import android.content.Context;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -12,7 +13,7 @@ import static dev.ukanth.ufirewall.service.RootShellService.NO_TOAST;
  * Created by ukanth on 21/10/17.
  */
 
-public class RootCommand {
+public class RootCommand implements Cloneable, Serializable {
     public Callback cb = null;
     public int successToast = NO_TOAST;
     public int failureToast = NO_TOAST;
@@ -27,22 +28,35 @@ public class RootCommand {
     public StringBuilder lastCommandResult;
     public int exitCode;
     public boolean done = false;
-
-    public RootCommand setIsv6(boolean isv6) {
-        this.isv6 = isv6;
-        return this;
-    }
-
+    public int hash = -1;
     public boolean isv6 = false;
 
     private List<String> commmands;
 
+    public RootCommand setHash(int hash) {
+        this.hash = hash;
+        return this;
+    }
+
     private RootShellService rootShellService;
+    private RootShellService2 rootShellService2;
 
     public RootCommand() {
         rootShellService = new RootShellService();
+        rootShellService2 = new RootShellService2();
     }
 
+
+    @Override
+    public RootCommand clone() {
+        RootCommand rootCommand = null;
+        try {
+            rootCommand = (RootCommand) super.clone();
+            rootCommand.isv6 = true;
+        } catch (CloneNotSupportedException e) {
+        }
+        return rootCommand;
+    }
 
     public List<String> getCommmands() {
         return commmands;
@@ -131,10 +145,30 @@ public class RootCommand {
      * @param script List of commands to run as root
      */
     public final void run(Context ctx, List<String> script) {
-        if(rootShellService == null) {
-            rootShellService =  new RootShellService();
+        if (rootShellService == null) {
+            rootShellService = new RootShellService();
         }
         rootShellService.runScriptAsRoot(ctx, script, this);
+    }
+
+    /**
+     * Run a series of commands as root; call cb.cbFunc() when complete
+     *
+     * @param ctx    Context object used to create toasts
+     * @param script List of commands to run as root
+     */
+    public final void run(Context ctx, List<String> script, boolean isv6) {
+        if (rootShellService == null) {
+            rootShellService = new RootShellService();
+        }
+        if (rootShellService2 == null) {
+            rootShellService2 = new RootShellService2();
+        }
+        if (isv6) {
+            rootShellService2.runScriptAsRoot(ctx, script, this);
+        } else {
+            rootShellService.runScriptAsRoot(ctx, script, this);
+        }
     }
 
     /**
@@ -144,8 +178,8 @@ public class RootCommand {
      * @param cmd Command to run as root
      */
     public final void run(Context ctx, String cmd) {
-        if(rootShellService == null) {
-            rootShellService =  new RootShellService();
+        if (rootShellService == null) {
+            rootShellService = new RootShellService();
         }
         List<String> script = new ArrayList<String>();
         script.add(cmd);

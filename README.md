@@ -1,12 +1,13 @@
-## AFWall+ (Android Firewall+) [![Build Status](https://travis-ci.org/ukanth/afwall.png?branch=beta)](https://travis-ci.org/ukanth/afwall) [![Crowdin](https://d322cqt584bo4o.cloudfront.net/afwall/localized.png)](https://crowdin.net/project/afwall)
+## AFWall+ (Android Firewall+)
+![Android CI](https://github.com/ukanth/afwall/workflows/Android%20CI/badge.svg?branch=beta) [![Crowdin](https://d322cqt584bo4o.cloudfront.net/afwall/localized.png)](https://crowdin.net/project/afwall) ![GitHub](https://img.shields.io/github/license/ukanth/afwall)  ![F-Droid](https://img.shields.io/f-droid/v/dev.ukanth.ufirewall) ![GitHub All Releases](https://img.shields.io/github/downloads/ukanth/afwall/total) ![GitHub repo size](https://img.shields.io/github/repo-size/ukanth/afwall)
 
 Description
 -----------
 
 Android Firewall+ (AFWall+) is an advanced iptables editor (GUI) for Android. It provides fine-grained control over which Android apps are allowed to access the network.
 
-For more information and a community discussion ground, please visit the official [XDA thread](http://forum.xda-developers.com/showthread.php?t=1957231) or the official [Wiki page](https://github.com/ukanth/afwall/wiki).
 
+For more information and a community discussion ground, please visit the official [XDA thread](http://forum.xda-developers.com/showthread.php?t=1957231) or the official [Wiki page](https://github.com/ukanth/afwall/wiki).
 
 <img src="https://raw.githubusercontent.com/ukanth/afwall/0502e6f17ceda08069720ff2f260902690e65e9b/screenshots/Main_2.0.png" width="300">
 
